@@ -163,6 +163,7 @@ class WechatArticleResult(BaseModel):
 class EpisodeImage(BaseModel):
     image_index: int
     image_theme: str
+    bottom_caption: str = ""
     image_prompt: str
     final_image_url: str
     local_image_path: str = ""
@@ -207,5 +208,6 @@ class DemoPipelineResponse(BaseModel):
     model_configured: bool
     model_strategy_details: dict[str, str] = Field(default_factory=dict)
     results: list[DemoPipelineItemResult]
+
 
 

@@ -280,6 +280,7 @@ web_research_notes：{json.dumps(web_research.notes, ensure_ascii=False)}
       "image_theme": "这一张单图的主题",
       "image_goal": "这一张单图讲清什么公开事实或证据缺口",
       "story_beat": "这一张单图在整体叙事中的推进",
+      "bottom_caption": "图片下方的一句话简述，简短、易读、像解释卡片的小结",
       "style_anchor": "固定画风提示词",
       "scene": "单场景画面内容",
       "characters": [
@@ -307,15 +308,31 @@ web_research_notes：{json.dumps(web_research.notes, ensure_ascii=False)}
 8. 输出必须是单图列表，禁止四宫格/分镜边框/拼图排版；每个 image_index 对应一张独立图片。
 9. 图片总数由信息表达清晰度决定；以讲清事实为第一优先级，不为凑图重复表达。
 10. 面向普通读者：出现专业词/缩写/英文术语（如 WSL2、ROCm、系统性风险、缓存TTL）时，必须先做生词解释，再做真假判断；无生词可直接判断。
+11. 全部图片必须形成强逻辑链路，固定顺序：新闻故事背景（能够让普通读者快速了解事情背景）-> 生词解释（术语=大白话解释）-> 关键词逐个分析。
+11.1 在关键词逐个分析时，应该先复述热传说法（如果这一说法本身就存在夸张或误读，也可以在复述时适当弱化措辞，但必须保留原说法的核心信息），再分析公开证据、证据缺口和可能的夸张转述；如果有真实背景讨论，也要单独成图讲清楚，避免和真假判断揉在一起。
+11.2 复述热传说法可酌情随时用单独一张图片讲清楚，避免压缩太多热传信息，也防止信息过于密集导致生成图片上有乱码
+12. 每张图内部叙事顺序固定为：问题 -> 公开信息/证据 -> 通俗解释；禁止跳步。
+13. 台词以“讲述性表达”为主，要求有趣味但克制、通俗易懂；避免判断性语句。
 11. 生词解释要用大白话短句，建议格式“术语=大白话解释（不超过20字）”。
 12. 台词要口语化、像在给普通用户解释新闻，不要像系统汇报。
 13. narration 和 dialogue 要口语化、日常化，避免术语堆叠和系统汇报腔。
 14. 对 uncertain / partially_supported 的内容必须保留谨慎表达，但不要反复堆术语。
-15. visual_prompt 必须适合直接拿去生成图片，并明确描述该单图画面。
-16. style_anchor 必须包含这段内容：{self.COMIC_STYLE_ANCHOR}
-17. 画面整体风格统一、适合手机端阅读，信息清楚，情绪有变化，适当带一点轻松感。
-18. 不要输出多余字段，不要输出 markdown。
-19. 避免生成可能被ai判定为疑似敏感内容的描述。
+15. bottom_caption 必须是一句放在图片下方的简短图注，用来概括这张图讲的核心点；控制在 10 到 28 个字，口语化、易读、像解释卡片的小结。
+16. visual_prompt 必须适合直接拿去生成图片，并明确描述该单图画面。
+16. bottom_caption 必须前后连贯，整组图读下来能形成连续复盘链。
+17. style_anchor 必须包含这段内容：{self.COMIC_STYLE_ANCHOR}
+18. 画面整体风格统一、适合手机端阅读，信息清楚，情绪有变化，适当带一点轻松感。
+19. 不要输出多余字段，不要输出 markdown。
+20. 允许 characters.dialogue 和 narration 保持较长、口语化、适合阅读的表达。
+21. 长信息优先放入角色对话气泡或旁白，不要把同样内容重复写进场景背景文字。
+22. scene 必须避免要求背景中出现大段可读中文、整页网页截图、官网首页、白板整句、海报式大标题。
+23. 若必须出现文字，每处只保留 2 到 8 个字的短标签，且总文字量尽量少；完整解释优先放在对话、旁白和图片下方图注里。
+24. 避免生成可能被ai判定为疑似敏感内容的描述。
+25. 如果需要表达一句较长信息，优先拆成角色对话或旁白，不要写成角色手里拿着的大字牌子。
+26. 禁止出现斜着印、旋转、透视倾斜、贴纸状、漂浮状的文字块；所有可见文字都应是横向、端正、清晰、短句。
+27. 英文和数字尽量少，能用中文解释就不用英文原词；如必须出现英文，每处只允许 1 到 3 个词，且必须横向排版。
+28. 如果新闻标题带强烈情绪词，写脚本时要自动去情绪化，只保留可核查的事实主张，不要照搬标题腔。
+
 
 新闻标题：{item.headline}
 新闻来源：{item.source}
@@ -390,6 +407,7 @@ web_research_notes：{json.dumps(web_research.notes, ensure_ascii=False)}
                 EpisodeImage(
                     image_index=generated_index,
                     image_theme=str(image_script.get("image_theme") or f"第{generated_index}张"),
+                    bottom_caption=str(image_script.get("bottom_caption") or "").strip(),
                     image_prompt=revised_prompt,
                     final_image_url=final_image_url,
                     local_image_path=local_image_path,
@@ -431,6 +449,7 @@ web_research_notes：{json.dumps(web_research.notes, ensure_ascii=False)}
 本张图片主题：{image_script.get("image_theme") or f"第{image_index}张"}
 本张图片目标：{image_script.get("image_goal") or ""}
 剧情推进：{image_script.get("story_beat") or ""}
+本张图片下方简述：{image_script.get("bottom_caption") or ""}
 固定风格：{image_script.get("style_anchor") or self.COMIC_STYLE_ANCHOR}
 本图脚本：{panel_json}
 
@@ -445,10 +464,17 @@ web_research_notes：{json.dumps(web_research.notes, ensure_ascii=False)}
 7. 不要把 uncertain、supported、claim、claim_verdicts、citation_ids、e1-e7 等内部术语直接画成大字主视觉。
 8. 完全还原脚本内容。主人公说的话通过对话气泡框表现。另外可以用手机屏幕、便签卡片、资料纸张、标题条等中传递信息。
 8.1 文字内容优先围绕“疑点、证据缺口、核查结论”，避免无关口号。
-9. 不要生成配音、字幕条、播放器按钮、水印、直播 UI、账号名或复杂英文术语海报。
+8.2 画面下方必须有一条简短图注，内容就是“本张图片下方简述”，做成简洁的小字说明条或说明卡片，一句话即可，不要写成长段字幕。
+8.3 除角色对话、必要短标签和底部图注外，背景环境尽量少出现可读文字，不要做官网首页或整页网页截图。
+9. 不要生成配音、长字幕条、播放器按钮、水印、直播 UI、账号名或复杂英文术语海报。
 10. 新闻讲解风格，手机端阅读友好，表情生动，非写实，无复杂背景。
 11. 只输出最终提示词正文。
 12. 避免生成可能被ai判定为疑似敏感内容的描述。
+13. 禁止任何倾斜文字、旋转文字、透视变形文字、弧形排版文字、印章式斜盖文字。
+14. 所有必须出现的文字都只能横向、平直、工整，像简单标签，不要艺术字，不要海报字。
+15. 不要让角色举着大字海报、打印页、新闻号外、截图卡片；如需表达信息，用角色对话气泡和底部图注完成。
+16. 人物台词必须显示完整，并且只能出现在对话气泡内，对话气泡内文字必须留出明显边距，不能贴边、不能溢出、不能挤成整段海报字。
+17. 对话框不允许重叠，必须保证每段对话有独立空间，避免文字堆叠成一大块。
 """.strip()
         return await self.shared_model_client.generate_text_for_stage("image_prompt", system_prompt, user_prompt)
     async def _build_wechat_publish(
@@ -464,13 +490,14 @@ web_research_notes：{json.dumps(web_research.notes, ensure_ascii=False)}
         if not self.wechat_publisher:
             return None
 
+        publish_title = str(wechat_article.title or writer.headline or item.headline).strip()
         ordered_episode_images = sorted(image.episode_images, key=lambda episode: episode.image_index)
         body_candidates = [episode.local_image_path or episode.final_image_url for episode in ordered_episode_images if episode.local_image_path or episode.final_image_url]
         cover_candidates = [image.final_image_url, item.cover_image]
         response = await self.wechat_publisher.publish_pipeline_article(
             issue_id=issue.id,
             item_id=storage_item_id,
-            title=writer.headline,
+            title=publish_title,
             digest=writer.social_caption,
             source_name=item.source,
             source_url=item.article_url,
@@ -503,7 +530,11 @@ web_research_notes：{json.dumps(web_research.notes, ensure_ascii=False)}
         writer: WriterResult,
     ) -> WechatArticleResult:
         system_prompt = (
-            "你是公众号深度稿件编辑。请把事实核查信息改写成适合微信公众号阅读的判断正文。"
+            "你是公众号深度编辑。请把事实核查信息改写成适合微信公众号阅读的解释型正文。"
+            "写作必须满足：谣言与事实明确区分、叙事链路清晰、文风统一、语言精炼、术语可读。"
+            "文风要求：通俗、克制、易懂，避免口语化和书面腔混杂。"
+            "表达要求：短句优先，先结论后解释，删除空话套话。"
+            "术语要求：专业术语首次出现时必须给出白话解释。"
             "不要输出内部术语标签，不要输出 markdown。你必须只返回 JSON。"
         )
         user_prompt = f"""
@@ -522,13 +553,19 @@ web_research_notes：{json.dumps(web_research.notes, ensure_ascii=False)}
 }}
 
 硬性要求：
-1. sections 保持 3 到 5 段。
-2. 文风是公众号解释文，不要写成分镜脚本、流程报告、模型输出说明。
-3. 不要出现 claim_id、verdict、citation_ids、e1/e2 等内部字段名。
-4. 对证据不足的部分要明确“目前没有公开证据”。
-5. 对有背景但被夸大的部分要明确“有讨论背景，但新闻说过头”。
-6. 允许保留谨慎语气，但要易懂、自然。
-7. 不要输出多余字段。
+1. sections 保持 3 到 5 段，每段只讲一个核心问题，段间要有自然衔接。
+2. 必须区分“谣言说法”和“公开事实”：每段都要写清“说法是什么、公开证据到哪一步、仍不确定什么”；不允许把“证据不足”直接写成“已经证伪”。
+3. 叙事要有逻辑链：先给结论，再给证据，再给边界或不确定点。
+4. 文风统一为公众号通俗易懂风格：自然、克制、易懂；不要口语化表达，不要书面官样句。
+5. 去冗余：删空话和重复表达；content 控制在 2 到 4 句，每句尽量短，先结论后解释。
+6. 术语可读：专业词、缩写、英文术语首次出现必须给白话解释，格式建议“术语=大白话解释（20字内）”。
+7. 不要出现 claim_id、verdict、citation_ids、e1/e2 等内部字段名。
+8. 不要输出多余字段。
+9. 正文层级必须清晰：sections 按“问题 -> 证据 -> 判断”推进，每个 heading 要具体，不要空泛标题。
+10. 每个 section 只保留一个核心点，内部叙事顺序固定为：问题 -> 证据 -> 判断。
+11. 每个 section 的 content 必须是 2 到 4 句短句；每句尽量短，避免长句和并列堆叠。
+12. 每个 section 必须包含且仅包含 1 句“【重点】”句，重点只允许落在：结论、关键数字、关键时间、关键主体。
+13. 段落衔接自然：每个 section 末句要引出下一段，避免信息跳跃和硬切换。
 
 新闻标题：{item.headline}
 新闻来源：{item.source}
@@ -821,6 +858,7 @@ web_research_notes：{json.dumps(web_research.notes, ensure_ascii=False)}
             image_theme = str(panel.get("image_theme") or panel_role or f"第{image_index}张").strip()
             image_goal = str(panel.get("image_goal") or normalized_panel["fact_focus"]).strip()
             story_beat = str(panel.get("story_beat") or "").strip()
+            bottom_caption = str(panel.get("bottom_caption") or image_goal or normalized_panel["fact_focus"]).strip()
             style_anchor = str(panel.get("style_anchor") or self.COMIC_STYLE_ANCHOR).strip()
             normalized_images.append(
                 {
@@ -828,6 +866,7 @@ web_research_notes：{json.dumps(web_research.notes, ensure_ascii=False)}
                     "image_theme": image_theme,
                     "image_goal": image_goal,
                     "story_beat": story_beat,
+                    "bottom_caption": bottom_caption,
                     "style_anchor": style_anchor,
                     "panels": [normalized_panel],
                 }
@@ -1130,6 +1169,8 @@ web_research_notes：{json.dumps(web_research.notes, ensure_ascii=False)}
     def _build_storage_item_id(self, run_stamp: str, item: IssueItem) -> str:
         base_value = item.id or str(item.news_id or "") or item.headline or "workspace"
         return self._safe_name(f"{run_stamp}-{base_value}")
+
+
 
 
 
