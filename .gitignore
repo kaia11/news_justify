@@ -1,0 +1,25 @@
+# 忽略 Python 缓存
+__pycache__/
+*.py[cod]
+*$py.class
+
+
+
+# 忽略数据文件夹（核心配置）
+/content_store/
+demo_backend/data/
+
+# 批处理/脚本文件
+start.bat
+start.ps1
+
+# 其他配置
+*.txt
+#!README.md
+
+WEB_FACTCHECK_IMPLEMENTATION_PLAN*
+
+# Environment files
+.env
+.env.*
+!.env.example
