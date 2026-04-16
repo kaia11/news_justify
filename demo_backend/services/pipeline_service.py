@@ -65,6 +65,7 @@ class DemoPipelineService:
             issue=issue,
             model_strategy=self.shared_model_client.strategy_label,
             model_configured=self.shared_model_client.configured,
+            model_strategy_details=self.shared_model_client.strategy_details,
             results=results,
         )
 
@@ -167,7 +168,7 @@ class DemoPipelineService:
 正文：{self._join_article_body(item)}
 """.strip()
 
-        payload = await self.shared_model_client.generate_json(system_prompt, user_prompt)
+        payload = await self.shared_model_client.generate_json_for_stage("research", system_prompt, user_prompt)
         claims = [Claim(**claim) for claim in payload.get("claims", [])]
         sources = [EvidenceItem(**source) for source in payload.get("reference_sources", [])]
         if not claims:
@@ -230,7 +231,7 @@ web_evidence：{json.dumps(evidence_summary, ensure_ascii=False)}
 web_research_notes：{json.dumps(web_research.notes, ensure_ascii=False)}
 """.strip()
 
-        payload = await self.shared_model_client.generate_json(system_prompt, user_prompt)
+        payload = await self.shared_model_client.generate_json_for_stage("factcheck", system_prompt, user_prompt)
         verdicts = [ClaimVerdict(**verdict) for verdict in payload.get("claim_verdicts", [])]
         if not verdicts:
             raise RuntimeError("Fact-check 阶段返回为空，模型没有生成 claim_verdicts。")
@@ -314,6 +315,7 @@ web_research_notes：{json.dumps(web_research.notes, ensure_ascii=False)}
 16. style_anchor 必须包含这段内容：{self.COMIC_STYLE_ANCHOR}
 17. 画面整体风格统一、适合手机端阅读，信息清楚，情绪有变化，适当带一点轻松感。
 18. 不要输出多余字段，不要输出 markdown。
+19. 避免生成可能被ai判定为疑似敏感内容的描述。
 
 新闻标题：{item.headline}
 新闻来源：{item.source}
@@ -323,7 +325,7 @@ web_research_notes：{json.dumps(web_research.notes, ensure_ascii=False)}
 事实核查边界：{json.dumps(fact_check.model_dump(), ensure_ascii=False)}
 """.strip()
 
-        payload = await self.shared_model_client.generate_json(system_prompt, user_prompt)
+        payload = await self.shared_model_client.generate_json_for_stage("writer", system_prompt, user_prompt)
         images = self._normalize_single_panels(payload.get("single_panels", []))
         if not images:
             raise RuntimeError("Writer 阶段返回为空，模型没有生成可用的 single_panels。")
@@ -441,16 +443,14 @@ web_research_notes：{json.dumps(web_research.notes, ensure_ascii=False)}
 5. 风格锚点必须体现：{self.COMIC_STYLE_ANCHOR}
 6. 画面重点是新闻场景、角色反应、被夸大的标题、缺失的证据、真实背景与误读之间的对比。
 7. 不要把 uncertain、supported、claim、claim_verdicts、citation_ids、e1-e7 等内部术语直接画成大字主视觉。
-8. 完全还原脚本内容。可通过对话气泡框，手机屏幕、便签卡片、资料纸张、标题条等中传递信息。
+8. 完全还原脚本内容。主人公说的话通过对话气泡框表现。另外可以用手机屏幕、便签卡片、资料纸张、标题条等中传递信息。
 8.1 文字内容优先围绕“疑点、证据缺口、核查结论”，避免无关口号。
-8.2 若本图涉及生词/术语（如 WSL2、ROCm、系统性风险、缓存TTL），文字顺序必须先“生词解释”后“判断结论”。
-8.3 生词解释要用大白话短句，建议格式“术语=解释”，单条不超过 20 字。
-8.4 不强制奇偶图配对或每轮两图，按本单图脚本把信息讲清即可。
 9. 不要生成配音、字幕条、播放器按钮、水印、直播 UI、账号名或复杂英文术语海报。
 10. 新闻讲解风格，手机端阅读友好，表情生动，非写实，无复杂背景。
 11. 只输出最终提示词正文。
+12. 避免生成可能被ai判定为疑似敏感内容的描述。
 """.strip()
-        return await self.shared_model_client.generate_text(system_prompt, user_prompt)
+        return await self.shared_model_client.generate_text_for_stage("image_prompt", system_prompt, user_prompt)
     async def _build_wechat_publish(
         self,
         issue: IssuePayload,
@@ -537,7 +537,7 @@ web_research_notes：{json.dumps(web_research.notes, ensure_ascii=False)}
 现有社交文案：{writer.social_caption}
 """.strip()
 
-        payload = await self.shared_model_client.generate_json(system_prompt, user_prompt)
+        payload = await self.shared_model_client.generate_json_for_stage("wechat_article", system_prompt, user_prompt)
         sections_payload = payload.get("sections")
         normalized_sections = []
         if isinstance(sections_payload, list):

@@ -19,15 +19,29 @@ class ModelRuntimeConfig:
     model_name: str
 
 
-class SharedModelClient:
-    """真实模型调用客户端。
+STAGE_RESEARCH = "research"
+STAGE_FACTCHECK = "factcheck"
+STAGE_WRITER = "writer"
+STAGE_IMAGE_PROMPT = "image_prompt"
+STAGE_WECHAT_ARTICLE = "wechat_article"
+STAGE_MODEL_FIELD_MAP = {
+    STAGE_RESEARCH: "model_research_name",
+    STAGE_FACTCHECK: "model_factcheck_name",
+    STAGE_WRITER: "model_writer_name",
+    STAGE_IMAGE_PROMPT: "model_image_prompt_name",
+    STAGE_WECHAT_ARTICLE: "model_wechat_article_name",
+}
 
-    改动后约定：
-    1. 文本阶段继续走 OpenAI compatible chat/completions
-    2. DashScope 图片模型不再走 /images/generations
-    3. wan2.x / qwen-image 等图片模型统一走百炼官方图片接口
-    4. 支持传入本地参考图 reference_image_path
-    5. 即使 .env 里的 base_url 是 compatible-mode/v1，图片阶段也会自动切回百炼根路径
+
+class SharedModelClient:
+    """Model client for real model calls.
+
+    Conventions:
+    1. Text stages still use the OpenAI-compatible chat/completions API.
+    2. DashScope image models do not use /images/generations.
+    3. wan2.x and qwen-image image models use the native DashScope image APIs.
+    4. Local reference images are supported through reference_image_path.
+    5. Even if .env uses compatible-mode/v1, image requests switch back to the DashScope root API.
     """
 
     def __init__(self, settings: Settings):
@@ -49,14 +63,55 @@ class SharedModelClient:
 
     @property
     def strategy_label(self) -> str:
+        if self._has_stage_model_overrides():
+            return "Stage routing mode: text stages use per-stage model selection and the image stage keeps its own model config."
         if self.settings.dashscope_api_key:
-            return "DashScope 模式：文本阶段默认使用 qwen-plus，图片阶段自动适配百炼图片接口"
+            return "DashScope mode: text uses qwen-plus by default and image generation uses the DashScope image API."
         if self.settings.use_shared_model:
-            return "演示版：文本阶段和图片阶段共用同一组模型配置"
-        return "扩展版：文本模型和图片模型分开配置"
+            return "Shared mode: text and image stages share one model service configuration."
+        return "Split mode: text model and image model are configured independently."
+
+    @property
+    def strategy_details(self) -> dict[str, str]:
+        details = {stage: self._resolve_stage_model_name(stage) for stage in STAGE_MODEL_FIELD_MAP}
+        details["image"] = self._get_resolved_model_name(self._get_image_config())
+        return details
 
     async def generate_text(self, system_prompt: str, user_prompt: str, temperature: float = 0.3) -> str:
         config = self._require_text_config()
+        return await self._generate_text_with_config(config, system_prompt, user_prompt, temperature)
+
+    async def generate_text_for_stage(
+        self,
+        stage: str,
+        system_prompt: str,
+        user_prompt: str,
+        temperature: float = 0.3,
+    ) -> str:
+        config = self._require_text_config_for_stage(stage)
+        return await self._generate_text_with_config(config, system_prompt, user_prompt, temperature)
+
+    async def generate_json(self, system_prompt: str, user_prompt: str, temperature: float = 0.2) -> dict[str, Any]:
+        config = self._require_text_config()
+        return await self._generate_json_with_config(config, system_prompt, user_prompt, temperature)
+
+    async def generate_json_for_stage(
+        self,
+        stage: str,
+        system_prompt: str,
+        user_prompt: str,
+        temperature: float = 0.2,
+    ) -> dict[str, Any]:
+        config = self._require_text_config_for_stage(stage)
+        return await self._generate_json_with_config(config, system_prompt, user_prompt, temperature)
+
+    async def _generate_text_with_config(
+        self,
+        config: ModelRuntimeConfig,
+        system_prompt: str,
+        user_prompt: str,
+        temperature: float,
+    ) -> str:
         payload = {
             "model": config.model_name,
             "messages": [
@@ -68,8 +123,13 @@ class SharedModelClient:
         response = await self._post_json(config.base_url, "/chat/completions", payload, config.api_key)
         return self._extract_text_content(response)
 
-    async def generate_json(self, system_prompt: str, user_prompt: str, temperature: float = 0.2) -> dict[str, Any]:
-        config = self._require_text_config()
+    async def _generate_json_with_config(
+        self,
+        config: ModelRuntimeConfig,
+        system_prompt: str,
+        user_prompt: str,
+        temperature: float,
+    ) -> dict[str, Any]:
         payload = {
             "model": config.model_name,
             "messages": [
@@ -182,7 +242,7 @@ class SharedModelClient:
         )
         task_id = str(task.get("output", {}).get("task_id") or "")
         if not task_id:
-            raise RuntimeError(f"百炼图片接口没有返回 task_id。原始返回：{task}")
+            raise RuntimeError(f"DashScope image API did not return task_id. Raw response: {task}")
         result = await self._poll_dashscope_task(api_root, config.api_key, task_id)
         return self._extract_dashscope_task_image_content(result)
 
@@ -236,10 +296,10 @@ class SharedModelClient:
                 if task_status == "SUCCEEDED":
                     return payload
                 if task_status in {"FAILED", "CANCELED", "UNKNOWN"}:
-                    message = payload.get("output", {}).get("message") or payload.get("message") or "图片任务失败。"
-                    raise RuntimeError(f"百炼图片任务失败：{message}")
+                    message = payload.get("output", {}).get("message") or payload.get("message") or "Image task failed."
+                    raise RuntimeError(f"DashScope image task failed: {message}")
                 await self._sleep_one_second()
-        raise RuntimeError(f"百炼图片任务轮询超时，最后状态：{last_payload}")
+        raise RuntimeError(f"DashScope image task polling timed out. Last payload: {last_payload}")
 
     async def _sleep_one_second(self) -> None:
         import asyncio
@@ -269,7 +329,7 @@ class SharedModelClient:
                 response_body = response.text.strip()
                 if response_body:
                     raise RuntimeError(
-                        f"模型接口请求失败：HTTP {response.status_code}，响应内容：{response_body}"
+                        f"Model request failed: HTTP {response.status_code}, response: {response_body}"
                     ) from exc
                 raise
             return response.json()
@@ -291,7 +351,7 @@ class SharedModelClient:
     def _extract_text_content(self, response: dict[str, Any]) -> str:
         choices = response.get("choices") if isinstance(response, dict) else None
         if not isinstance(choices, list) or not choices:
-            raise RuntimeError("模型返回里没有 choices 字段。")
+            raise RuntimeError("Model response does not contain choices.")
 
         first_choice = choices[0] if isinstance(choices[0], dict) else {}
         message = first_choice.get("message") if isinstance(first_choice, dict) else {}
@@ -312,12 +372,12 @@ class SharedModelClient:
         if isinstance(text, str) and text.strip():
             return text.strip()
 
-        raise RuntimeError("模型返回里没有可用的文本内容。")
+        raise RuntimeError("Model response does not contain usable text content.")
 
     def _extract_image_content(self, response: dict[str, Any]) -> dict[str, Any]:
         data = response.get("data") if isinstance(response, dict) else None
         if not isinstance(data, list) or not data:
-            raise RuntimeError("图片模型返回里没有 data 字段。")
+            raise RuntimeError("Image model response does not contain data.")
 
         first_item = data[0] if isinstance(data[0], dict) else {}
         image_url = first_item.get("url")
@@ -336,22 +396,22 @@ class SharedModelClient:
                 "revised_prompt": str(revised_prompt),
             }
 
-        raise RuntimeError("图片模型返回里没有 url 或 b64_json。")
+        raise RuntimeError("Image model response does not contain url or b64_json.")
 
     def _extract_dashscope_task_image_content(self, response: dict[str, Any]) -> dict[str, Any]:
         output = response.get("output") if isinstance(response, dict) else None
         results = output.get("results") if isinstance(output, dict) else None
         if not isinstance(results, list) or not results:
-            raise RuntimeError(f"百炼图片接口返回里没有 output.results。原始返回：{response}")
+            raise RuntimeError(f"DashScope image response does not contain output.results. Raw response: {response}")
 
         first_item = results[0] if isinstance(results[0], dict) else {}
         image_url = str(first_item.get("url") or "").strip()
         actual_prompt = str(first_item.get("actual_prompt") or first_item.get("orig_prompt") or "")
         if not image_url:
             code = first_item.get("code")
-            message = first_item.get("message") or "百炼图片接口没有返回图片 URL。"
+            message = first_item.get("message") or "DashScope image response does not contain an image URL."
             if code:
-                raise RuntimeError(f"百炼图片接口失败：code={code}, message={message}")
+                raise RuntimeError(f"DashScope image API failed: code={code}, message={message}")
             raise RuntimeError(message)
         return {
             "final_image_url": image_url,
@@ -361,7 +421,7 @@ class SharedModelClient:
     def _extract_dashscope_multimodal_image_content(self, response: dict[str, Any]) -> dict[str, Any]:
         output = response.get("output") if isinstance(response, dict) else None
         if not isinstance(output, dict):
-            raise RuntimeError(f"百炼多模态图片接口返回里没有 output。原始返回：{response}")
+            raise RuntimeError(f"DashScope multimodal image response does not contain output. Raw response: {response}")
 
         results = output.get("results")
         if isinstance(results, list) and results:
@@ -389,12 +449,12 @@ class SharedModelClient:
                                 "revised_prompt": "",
                             }
 
-        raise RuntimeError(f"百炼多模态图片接口返回里没有可用图片地址。原始返回：{response}")
+        raise RuntimeError(f"DashScope multimodal image response does not contain a usable image URL. Raw response: {response}")
 
     def _parse_json_text(self, text: str) -> dict[str, Any]:
         normalized = text.strip()
         if not normalized:
-            raise RuntimeError("模型返回了空 JSON。")
+            raise RuntimeError("Model returned empty JSON.")
 
         try:
             parsed = json.loads(normalized)
@@ -405,23 +465,29 @@ class SharedModelClient:
 
         match = re.search(r"\{.*\}", normalized, re.DOTALL)
         if not match:
-            raise RuntimeError("无法从模型输出中提取 JSON 对象。")
+            raise RuntimeError("Unable to extract a JSON object from model output.")
 
         parsed = json.loads(match.group(0))
         if not isinstance(parsed, dict):
-            raise RuntimeError("模型输出不是 JSON 对象。")
+            raise RuntimeError("Model output is not a JSON object.")
         return parsed
 
     def _require_text_config(self) -> ModelRuntimeConfig:
         config = self._get_text_config()
         if not config:
-            raise RuntimeError("文本模型配置不完整，请检查 .env。")
+            raise RuntimeError("Text model configuration is incomplete. Please check .env.")
+        return config
+
+    def _require_text_config_for_stage(self, stage: str) -> ModelRuntimeConfig:
+        config = self._get_text_config_for_stage(stage)
+        if not config:
+            raise RuntimeError(f"Text model configuration is incomplete for stage={stage}. Please check .env.")
         return config
 
     def _require_image_config(self) -> ModelRuntimeConfig:
         config = self._get_image_config()
         if not config:
-            raise RuntimeError("图片模型配置不完整，请检查 .env。")
+            raise RuntimeError("Image model configuration is incomplete. Please check .env.")
         return config
 
     def _get_text_config(self) -> ModelRuntimeConfig | None:
@@ -445,6 +511,51 @@ class SharedModelClient:
             self.settings.text_model_api_key,
             self.settings.text_model_name,
         )
+
+    def _get_text_config_for_stage(self, stage: str) -> ModelRuntimeConfig | None:
+        stage_model_name = self._get_stage_model_name(stage)
+        if stage_model_name:
+            transport = self._get_text_transport()
+            if transport:
+                base_url, api_key = transport
+                return self._build_config(base_url, api_key, stage_model_name)
+        return self._get_text_config()
+
+    def _get_text_transport(self) -> tuple[str, str] | None:
+        dashscope_base_url = str(self.settings.dashscope_base_url or "").strip()
+        dashscope_api_key = str(self.settings.dashscope_api_key or "").strip()
+        if dashscope_base_url and dashscope_api_key:
+            return dashscope_base_url, dashscope_api_key
+
+        if self.settings.use_shared_model:
+            shared_base_url = str(self.settings.shared_model_base_url or "").strip()
+            shared_api_key = str(self.settings.shared_model_api_key or "").strip()
+            if shared_base_url and shared_api_key:
+                return shared_base_url, shared_api_key
+
+        text_base_url = str(self.settings.text_model_base_url or "").strip()
+        text_api_key = str(self.settings.text_model_api_key or "").strip()
+        if text_base_url and text_api_key:
+            return text_base_url, text_api_key
+
+        return None
+
+    def _get_stage_model_name(self, stage: str) -> str:
+        field_name = STAGE_MODEL_FIELD_MAP.get(stage, "")
+        if not field_name:
+            return ""
+        return str(getattr(self.settings, field_name, "") or "").strip()
+
+    def _resolve_stage_model_name(self, stage: str) -> str:
+        return self._get_resolved_model_name(self._get_text_config_for_stage(stage))
+
+    def _get_resolved_model_name(self, config: ModelRuntimeConfig | None) -> str:
+        if not config:
+            return ""
+        return str(config.model_name or "").strip()
+
+    def _has_stage_model_overrides(self) -> bool:
+        return any(self._get_stage_model_name(stage) for stage in STAGE_MODEL_FIELD_MAP)
 
     def _get_image_config(self) -> ModelRuntimeConfig | None:
         dashscope_image_config = self._build_config(
@@ -508,10 +619,10 @@ class SharedModelClient:
 
     def _to_data_url(self, image_path: Path) -> str:
         if not image_path.exists() or not image_path.is_file():
-            raise RuntimeError(f"参考图不存在：{image_path}")
+            raise RuntimeError(f"Reference image does not exist: {image_path}")
         suffix = image_path.suffix.lower()
         if suffix not in {".jpg", ".jpeg", ".png", ".bmp", ".webp"}:
-            raise RuntimeError("参考图格式只支持 jpg/jpeg/png/bmp/webp。")
+            raise RuntimeError("Reference image format must be jpg/jpeg/png/bmp/webp.")
         mime_type = self._guess_mime_type(suffix)
         encoded = base64.b64encode(image_path.read_bytes()).decode("utf-8")
         return f"data:{mime_type};base64,{encoded}"
@@ -526,9 +637,4 @@ class SharedModelClient:
         if suffix == ".webp":
             return "image/webp"
         return "application/octet-stream"
-
-
-
-
-
 

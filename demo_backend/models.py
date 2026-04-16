@@ -205,6 +205,7 @@ class DemoPipelineResponse(BaseModel):
     issue: IssuePayload
     model_strategy: str
     model_configured: bool
+    model_strategy_details: dict[str, str] = Field(default_factory=dict)
     results: list[DemoPipelineItemResult]
 
 

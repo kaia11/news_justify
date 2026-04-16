@@ -32,6 +32,11 @@ class Settings(BaseSettings):
     text_model_base_url: str = ""
     text_model_api_key: str = ""
     text_model_name: str = ""
+    model_research_name: str = ""
+    model_factcheck_name: str = ""
+    model_writer_name: str = ""
+    model_image_prompt_name: str = ""
+    model_wechat_article_name: str = ""
     image_model_base_url: str = ""
     image_model_api_key: str = ""
     image_model_name: str = ""
@@ -49,9 +54,15 @@ class Settings(BaseSettings):
     douyin_client_secret: str = ""
     douyin_redirect_uri: str = ""
 
-    model_config = SettingsConfigDict(env_file=str(ENV_FILE), env_file_encoding="utf-8", extra="ignore")
+    model_config = SettingsConfigDict(
+        env_file=str(ENV_FILE),
+        env_file_encoding="utf-8",
+        extra="ignore",
+        protected_namespaces=("settings_",),
+    )
 
 
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:
     return Settings()
+
