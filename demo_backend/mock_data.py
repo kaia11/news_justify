@@ -34,38 +34,38 @@ MOCK_NEWS_ITEMS_1 = [
 ]
 
 
-MOCK_ARTICLE_BODY_2 = [
-    "刚刚，一则耸动消息在社交平台热传：Claude 新模型 Mythos 危险到让鲍威尔召集华尔街紧急开会，全美安全股暴跌 2 万亿。",
-    "热传内容声称，华尔街巨头被紧急召往华盛顿，Mythos 这个模型让美国财长和美联储主席都感到恐慌，并已向全美金融业 CEO 发出警告。",
-    "还有说法称，短短一年内，SaaS 市场已经因为这类模型冲击蒸发 2 万亿美元，并把金融恐慌、科技估值下跌和 AI 风险直接捆绑在一起。",
-    "爆料进一步指向 Anthropic，称其最新模型 Mythos 可能对金融业造成巨大风险，甚至暗示监管层已经把它视为系统性威胁。",
-    "但目前流传内容中缺少最关键的公开证据，例如会议通知、参会名单、官方声明、市场数据来源，以及 Mythos 这一模型名称本身是否真实存在。",
-    "一些说法还把 AI 安全讨论、金融市场波动和监管预警混在一起，容易让人误以为已经发生了经官方确认的紧急事件。",
-    "如果只看这些帖子，很容易得出“新模型已经引爆华尔街危机”的结论；但从信息结构看，这更像是把真实的 AI 风险讨论、宏观市场焦虑和未经证实的细节拼接成一条半真半假的爆炸性消息。",
-]
+# MOCK_ARTICLE_BODY_2 = [
+#     "刚刚，一则耸动消息在社交平台热传：Claude 新模型 Mythos 危险到让鲍威尔召集华尔街紧急开会，全美安全股暴跌 2 万亿。",
+#     "热传内容声称，华尔街巨头被紧急召往华盛顿，Mythos 这个模型让美国财长和美联储主席都感到恐慌，并已向全美金融业 CEO 发出警告。",
+#     "还有说法称，短短一年内，SaaS 市场已经因为这类模型冲击蒸发 2 万亿美元，并把金融恐慌、科技估值下跌和 AI 风险直接捆绑在一起。",
+#     "爆料进一步指向 Anthropic，称其最新模型 Mythos 可能对金融业造成巨大风险，甚至暗示监管层已经把它视为系统性威胁。",
+#     "但目前流传内容中缺少最关键的公开证据，例如会议通知、参会名单、官方声明、市场数据来源，以及 Mythos 这一模型名称本身是否真实存在。",
+#     "一些说法还把 AI 安全讨论、金融市场波动和监管预警混在一起，容易让人误以为已经发生了经官方确认的紧急事件。",
+#     "如果只看这些帖子，很容易得出“新模型已经引爆华尔街危机”的结论；但从信息结构看，这更像是把真实的 AI 风险讨论、宏观市场焦虑和未经证实的细节拼接成一条半真半假的爆炸性消息。",
+# ]
 
-MOCK_NEWS_ITEMS_2 = [
-    NewsItem(
-        id="20260411-claude-mythos-wall-street-rumor",
-        news_id=2026041102,
-        title="Claude新模型危险，鲍威尔召集华尔街紧急开会！全美安全股暴跌2万亿",
-        summary="网传 Anthropic 最新模型 Mythos 危险到引发鲍威尔和美国财长紧急召集华尔街，并导致全美安全股暴跌 2 万亿。相关说法混入了真实的 AI 风险讨论和市场焦虑，但关键细节目前缺乏公开证据。",
-        url="https://example.com/mock/claude-mythos-wall-street-rumor",
-        source="社交平台热传",
-        score="9.8",
-        cover_url="",
-        raw={
-            "published_at": "2026-04-11T14:30:00+08:00",
-            "author": "Mock Desk",
-            "brief": {
-                "headline": "Claude新模型危险，鲍威尔召集华尔街紧急开会！全美安全股暴跌2万亿",
-                "lead": "这是一条把 AI 安全争议、金融恐慌和未经证实的高层会议细节混在一起传播的热传消息，爆点很强，但证据链明显不完整。",
-                "paragraphs": MOCK_ARTICLE_BODY_1,
-            },
-            "content": "\n".join(MOCK_ARTICLE_BODY_1),
-        },
-    ),
-]
+# MOCK_NEWS_ITEMS_2 = [
+#     NewsItem(
+#         id="20260411-claude-mythos-wall-street-rumor",
+#         news_id=2026041102,
+#         title="Claude新模型危险，鲍威尔召集华尔街紧急开会！全美安全股暴跌2万亿",
+#         summary="网传 Anthropic 最新模型 Mythos 危险到引发鲍威尔和美国财长紧急召集华尔街，并导致全美安全股暴跌 2 万亿。相关说法混入了真实的 AI 风险讨论和市场焦虑，但关键细节目前缺乏公开证据。",
+#         url="https://example.com/mock/claude-mythos-wall-street-rumor",
+#         source="社交平台热传",
+#         score="9.8",
+#         cover_url="",
+#         raw={
+#             "published_at": "2026-04-11T14:30:00+08:00",
+#             "author": "Mock Desk",
+#             "brief": {
+#                 "headline": "Claude新模型危险，鲍威尔召集华尔街紧急开会！全美安全股暴跌2万亿",
+#                 "lead": "这是一条把 AI 安全争议、金融恐慌和未经证实的高层会议细节混在一起传播的热传消息，爆点很强，但证据链明显不完整。",
+#                 "paragraphs": MOCK_ARTICLE_BODY_1,
+#             },
+#             "content": "\n".join(MOCK_ARTICLE_BODY_1),
+#         },
+#     ),
+# ]
 
 
 MOCK_ARTICLE_BODY_2 = [
@@ -117,7 +117,7 @@ def build_mock_issue() -> IssuePayload:
             cover_image=item.cover_url,
             expanded_body=item.raw.get("brief", {}).get("paragraphs", [item.summary]),
         )
-        for item in MOCK_NEWS_ITEMS_1
+        for item in MOCK_NEWS_ITEMS_2
     ]
 
     return IssuePayload(

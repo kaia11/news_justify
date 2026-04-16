@@ -280,6 +280,7 @@ web_research_notes：{json.dumps(web_research.notes, ensure_ascii=False)}
       "image_theme": "这一张单图的主题",
       "image_goal": "这一张单图讲清什么公开事实或证据缺口",
       "story_beat": "这一张单图在整体叙事中的推进",
+      "bottom_caption": "图片下方的一句话简述，简短、易读、像解释卡片的小结",
       "style_anchor": "固定画风提示词",
       "scene": "单场景画面内容",
       "characters": [
@@ -311,12 +312,16 @@ web_research_notes：{json.dumps(web_research.notes, ensure_ascii=False)}
 12. 台词要口语化、像在给普通用户解释新闻，不要像系统汇报。
 13. narration 和 dialogue 要口语化、日常化，避免术语堆叠和系统汇报腔。
 14. 对 uncertain / partially_supported 的内容必须保留谨慎表达，但不要反复堆术语。
-15. visual_prompt 必须适合直接拿去生成图片，并明确描述该单图画面。
-16. style_anchor 必须包含这段内容：{self.COMIC_STYLE_ANCHOR}
-17. 画面整体风格统一、适合手机端阅读，信息清楚，情绪有变化，适当带一点轻松感。
-18. 不要输出多余字段，不要输出 markdown。
-19. 避免生成可能被ai判定为疑似敏感内容的描述。
-
+15. bottom_caption 必须是一句放在图片下方的简短图注，用来概括这张图讲的核心点；控制在 10 到 28 个字，口语化、易读、像解释卡片的小结。
+16. visual_prompt 必须适合直接拿去生成图片，并明确描述该单图画面。
+17. style_anchor 必须包含这段内容：{self.COMIC_STYLE_ANCHOR}
+18. 画面整体风格统一、适合手机端阅读，信息清楚，情绪有变化，适当带一点轻松感。
+19. 不要输出多余字段，不要输出 markdown。
+20. 允许 characters.dialogue 和 narration 保持较长、口语化、适合阅读的表达。
+21. 长信息优先放入角色对话气泡或旁白，不要把同样内容重复写进场景背景文字。
+22. scene 必须避免要求背景中出现大段可读中文、整页网页截图、官网首页、白板整句、海报式大标题。
+23. 若必须出现文字，每处只保留 2 到 8 个字的短标签，且总文字量尽量少；完整解释优先放在对话、旁白和图片下方图注里。
+24. 避免生成可能被ai判定为疑似敏感内容的描述。
 新闻标题：{item.headline}
 新闻来源：{item.source}
 claims：{json.dumps([claim.model_dump() for claim in research.claims], ensure_ascii=False)}
@@ -390,6 +395,7 @@ web_research_notes：{json.dumps(web_research.notes, ensure_ascii=False)}
                 EpisodeImage(
                     image_index=generated_index,
                     image_theme=str(image_script.get("image_theme") or f"第{generated_index}张"),
+                    bottom_caption=str(image_script.get("bottom_caption") or "").strip(),
                     image_prompt=revised_prompt,
                     final_image_url=final_image_url,
                     local_image_path=local_image_path,
@@ -431,6 +437,7 @@ web_research_notes：{json.dumps(web_research.notes, ensure_ascii=False)}
 本张图片主题：{image_script.get("image_theme") or f"第{image_index}张"}
 本张图片目标：{image_script.get("image_goal") or ""}
 剧情推进：{image_script.get("story_beat") or ""}
+本张图片下方简述：{image_script.get("bottom_caption") or ""}
 固定风格：{image_script.get("style_anchor") or self.COMIC_STYLE_ANCHOR}
 本图脚本：{panel_json}
 
@@ -445,7 +452,9 @@ web_research_notes：{json.dumps(web_research.notes, ensure_ascii=False)}
 7. 不要把 uncertain、supported、claim、claim_verdicts、citation_ids、e1-e7 等内部术语直接画成大字主视觉。
 8. 完全还原脚本内容。主人公说的话通过对话气泡框表现。另外可以用手机屏幕、便签卡片、资料纸张、标题条等中传递信息。
 8.1 文字内容优先围绕“疑点、证据缺口、核查结论”，避免无关口号。
-9. 不要生成配音、字幕条、播放器按钮、水印、直播 UI、账号名或复杂英文术语海报。
+8.2 画面下方必须有一条简短图注，内容就是“本张图片下方简述”，做成简洁的小字说明条或说明卡片，一句话即可，不要写成长段字幕。
+8.3 除角色对话、必要短标签和底部图注外，背景环境尽量少出现可读文字，不要做官网首页或整页网页截图。
+9. 不要生成配音、长字幕条、播放器按钮、水印、直播 UI、账号名或复杂英文术语海报。
 10. 新闻讲解风格，手机端阅读友好，表情生动，非写实，无复杂背景。
 11. 只输出最终提示词正文。
 12. 避免生成可能被ai判定为疑似敏感内容的描述。
@@ -821,6 +830,7 @@ web_research_notes：{json.dumps(web_research.notes, ensure_ascii=False)}
             image_theme = str(panel.get("image_theme") or panel_role or f"第{image_index}张").strip()
             image_goal = str(panel.get("image_goal") or normalized_panel["fact_focus"]).strip()
             story_beat = str(panel.get("story_beat") or "").strip()
+            bottom_caption = str(panel.get("bottom_caption") or image_goal or normalized_panel["fact_focus"]).strip()
             style_anchor = str(panel.get("style_anchor") or self.COMIC_STYLE_ANCHOR).strip()
             normalized_images.append(
                 {
@@ -828,6 +838,7 @@ web_research_notes：{json.dumps(web_research.notes, ensure_ascii=False)}
                     "image_theme": image_theme,
                     "image_goal": image_goal,
                     "story_beat": story_beat,
+                    "bottom_caption": bottom_caption,
                     "style_anchor": style_anchor,
                     "panels": [normalized_panel],
                 }
@@ -1130,6 +1141,7 @@ web_research_notes：{json.dumps(web_research.notes, ensure_ascii=False)}
     def _build_storage_item_id(self, run_stamp: str, item: IssueItem) -> str:
         base_value = item.id or str(item.news_id or "") or item.headline or "workspace"
         return self._safe_name(f"{run_stamp}-{base_value}")
+
 
 
 
