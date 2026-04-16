@@ -101,6 +101,39 @@ MOCK_NEWS_ITEMS_2 = [
     ),
 ]
 
+MOCK_ARTICLE_BODY_3 = [
+    "震撼！AI将取代1/3影像科医生，医学界迎来巨变。",
+    "你知道吗？如今人工智能发展如此迅速，各种软件可以自动分析医学影像图片并做出诊断，比如 CT、MRI。",
+    "Deepseek 预测未来十年内，医院影像科医生将面临不可逆转的变革。说实话，这个消息确实让人震惊。",
+    "如果人工智能继续以当前速度发展，到 2028-2035 年，AI 系统将取代 80% 以上的常规影像判读工作。",
+    "热传内容还称，CT、DR、MRI 的初筛准确率可达 99.2%，超过人类医生平均 96.8% 的准确率。",
+    "按这种说法，影像科医生数量将缩减到现有规模的三分之二左右，新入职医生会直接面临 AI 竞争压力。",
+    "还有说法进一步推断，影像诊断服务费会断崖式下降，单个病例收费可能降至当前价格的 15%。",
+]
+
+MOCK_NEWS_ITEMS_3 = [
+    NewsItem(
+        id="20250407-ai-radiology-doctors-rumor",
+        news_id=2025040701,
+        title="震撼！AI将取代1/3影像科医生，医学界迎来巨变",
+        summary="网传随着人工智能快速发展，到 2028-2035 年，AI 将取代 80% 以上常规影像判读工作，影像科医生规模会缩减 1/3，影像诊断收费甚至可能降到现在的 15%。相关说法把技术进展、行业预测和收费变化混在一起，结论非常激进。",
+        url="https://example.com/mock/ai-radiology-doctors-rumor",
+        source="社交平台热传",
+        score="9.1",
+        cover_url="",
+        raw={
+            "published_at": "2025-04-07T17:00:00+08:00",
+            "author": "Mock Desk",
+            "brief": {
+                "headline": "震撼！AI将取代1/3影像科医生，医学界迎来巨变",
+                "lead": "这条消息把 AI 医学影像识别能力、未来岗位变化和医疗服务价格下降连在一起讲，听起来很惊人，但中间跨了好几层推断。",
+                "paragraphs": MOCK_ARTICLE_BODY_3,
+            },
+            "content": "\n".join(MOCK_ARTICLE_BODY_3),
+        },
+    ),
+]
+
 
 
 
@@ -117,7 +150,7 @@ def build_mock_issue() -> IssuePayload:
             cover_image=item.cover_url,
             expanded_body=item.raw.get("brief", {}).get("paragraphs", [item.summary]),
         )
-        for item in MOCK_NEWS_ITEMS_2
+        for item in MOCK_NEWS_ITEMS_3
     ]
 
     return IssuePayload(
@@ -128,3 +161,4 @@ def build_mock_issue() -> IssuePayload:
         source_mode="mock",
         items=items,
     )
+

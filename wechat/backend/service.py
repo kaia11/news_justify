@@ -408,7 +408,6 @@ class WechatPublishService:
         img_style = "display:block;width:100%;height:auto;border-radius:8px;margin:16px 0;"
         sections = [
             f"<div style=\"{wrapper_style}\">",
-            f"<h1 style=\"{h1_style}\">{article_title}</h1>",
             f"<p style=\"{p_style}\"><strong style=\"font-weight:700;color:#111827;\">来源：</strong>{self._escape_html(source_name)}</p>",
             f"<p style=\"{p_style}\">{lead}</p>",
         ]
