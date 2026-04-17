@@ -148,7 +148,11 @@ class WriterResult(BaseModel):
 
 class WechatArticleSection(BaseModel):
     heading: str
-    content: str
+    summary: str = ""
+    key_point: str = ""
+    explain: str = ""
+    transition: str = ""
+    content: str = ""
 
 
 class WechatArticleResult(BaseModel):

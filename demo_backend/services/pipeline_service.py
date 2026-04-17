@@ -92,7 +92,7 @@ class DemoPipelineService:
         image = await self._build_image(item, writer, storage_item_id)
         debug_artifacts["image"] = self._write_debug_json(storage_item_id, "05_image.json", image.model_dump())
 
-        wechat_article = await self._build_wechat_article(item, fact_check, writer)
+        wechat_article = await self._build_wechat_article(item, research, web_research, writer, fact_check, writer_brief)
         debug_artifacts["wechat_article"] = self._write_debug_json(storage_item_id, "06_wechat_article.json", wechat_article.model_dump())
 
         wechat_publish = await self._build_wechat_publish(issue, item, storage_item_id, writer, fact_check, image, wechat_article)
@@ -341,6 +341,10 @@ B图：说明公开能查到什么、证据缺口在哪里、该如何理解。
 26. 禁止出现斜着印、旋转、透视倾斜、贴纸状、漂浮状的文字块；所有可见文字都应是横向、端正、清晰、短句。
 27. 英文和数字尽量少，能用中文解释就不用英文原词；如必须出现英文，每处只允许 1 到 3 个词，且必须横向排版。
 28. 如果新闻标题带强烈情绪词，写脚本时要自动去情绪化，只保留可核查的事实主张，不要照搬标题腔。
+29. 同一张图片中尽量不要出现四个以上的特殊符号，如“#”“@”“%”等。且尽量不要使用表情符号
+30. 同一张图片最多两段长文字，并且尽量不要出现四处以上的文字块
+scene 和 visual_prompt 中，凡是属于背景装饰、辅助道具、资料贴图、纸带、便签、卡片、屏幕缩略图的元素，一律不得包含可读文字、数字、英文单词或标签。
+如需表达“代码、表格、文档、会议记录、聊天记录”等概念，只能使用抽象图标或无字缩略形状表示，不能直接写出词语本身。
 
 
 新闻标题：{item.headline}
@@ -535,50 +539,60 @@ web_research_notes：{json.dumps(web_research.notes, ensure_ascii=False)}
     async def _build_wechat_article(
         self,
         item: IssueItem,
-        fact_check: FactCheckResult,
+        research: ResearchResult,
+        web_research: WebResearchResult,
         writer: WriterResult,
+        fact_check: FactCheckResult,
+        writer_brief: dict[str, Any],
     ) -> WechatArticleResult:
         system_prompt = (
-            "你是公众号深度编辑。请把事实核查信息改写成适合微信公众号阅读的解释型正文。"
-            "写作必须满足：谣言与事实明确区分、叙事链路清晰、文风统一、语言精炼、术语可读。"
-            "文风要求：通俗、克制、易懂，避免口语化和书面腔混杂。"
-            "表达要求：短句优先，先结论后解释，删除空话套话。"
-            "术语要求：专业术语首次出现时必须给出白话解释。"
-            "不要输出内部术语标签，不要输出 markdown。你必须只返回 JSON。"
+                "你是一位拥有百万阅读量的深度事实核查号主笔。你擅长剥开谣言伪装，用极具逻辑美感且易读的文字还原真相。"
+                "核心创作准则："
+                "你写的是“先交代热传新闻原始说法，再进入解释与核查”的公众号正文。"
+                "不要一上来直接反驳、下判断或讨论证据缺口，必须先让读者知道这条新闻原本在说什么。"
+                "1. 叙事化拆解：采用'剥洋葱'逻辑，不要机械罗列，要通过逻辑递进让真相自然浮现。"
+                "2. 隐形科普：遇到专业术语（如 LPU、SaaS、API 等）时，禁止使用‘术语=定义’的呆板格式。请将其功能自然融入句子中，让非专业读者也能秒懂。"
+                "3. 语感去油：严禁使用‘综上所述’、‘值得注意的是’、‘首先/其次’等 AI 常用套话。追求节奏感强、冷静克制的短句。"
+                "4. 严谨边界：严格区分‘证伪’与‘证据不足’。对查无实据的事实使用‘未获证实’或‘查无实据’，不主观臆断。 "
         )
         user_prompt = f"""
 请根据输入生成一个 JSON 对象，字段严格如下：
 {{
-  "title": "字符串",
-  "digest": "字符串，120字以内",
-  "lead": "字符串，1段导语",
+  "digest": "字符串，精炼概括传闻/新闻本身（120字以内）",
+  "lead": "字符串，正文导语。精炼概括新闻本身，从当前新闻引发的社会情绪或某个逻辑疑点切入，勾起读者点击欲。",
   "sections": [
     {{
-      "heading": "字符串，小标题",
-      "content": "字符串，2-4句，通俗可读"
+      "heading": "字符串。具有洞察力的小标题",
+      "summary": "字符串。本段结论",
+      "key_point": "字符串。核心数据或关键定性",
+      "explain": "字符串。补充解释（1-2句）",
+      "transition": "字符串，可为空。自然承接下一段，不要预告腔。"
     }}
   ],
-  "ending": "字符串，结尾总结"
+  "ending": "字符串，结尾总结。升华至理性思考，拒绝口号。"
 }}
 
 硬性要求：
-1. sections 保持 3 到 5 段，每段只讲一个核心问题，段间要有自然衔接。
-2. 必须区分“谣言说法”和“公开事实”：每段都要写清“说法是什么、公开证据到哪一步、仍不确定什么”；不允许把“证据不足”直接写成“已经证伪”。
-3. 叙事要有逻辑链：先给结论，再给证据，再给边界或不确定点。
-4. 文风统一为公众号通俗易懂风格：自然、克制、易懂；不要口语化表达，不要书面官样句。
-5. 去冗余：删空话和重复表达；content 控制在 2 到 4 句，每句尽量短，先结论后解释。
-6. 术语可读：专业词、缩写、英文术语首次出现必须给白话解释，格式建议“术语=大白话解释（20字内）”。
-7. 不要出现 claim_id、verdict、citation_ids、e1/e2 等内部字段名。
-8. 不要输出多余字段。
-9. 正文层级必须清晰：sections 按“问题 -> 证据 -> 判断”推进，每个 heading 要具体，不要空泛标题。
-10. 每个 section 只保留一个核心点，内部叙事顺序固定为：问题 -> 证据 -> 判断。
-11. 每个 section 的 content 必须是 2 到 4 句短句；每句尽量短，避免长句和并列堆叠。
-12. 每个 section 必须包含且仅包含 1 句“【重点】”句，重点只允许落在：结论、关键数字、关键时间、关键主体。
-13. 段落衔接自然：每个 section 末句要引出下一段，避免信息跳跃和硬切换。
+1. lead 必须先用 1 段话总结交代这条热传新闻原本在说什么，概括其核心主张，不要一上来直接进入反驳、判断或证据分析。
+2. sections 的第 1 段必须用于说明“这条新闻在说什么”或“热传说法是什么”，先把原始说法讲清楚，再进入后续辨析。
+3. 不允许直接对一个尚未出场的数字、术语、报告、截图或结论做判断；如果正文要讨论某个具体说法，必须先让读者知道热传内容原本是怎么说的。
+4. 写作时优先参考新闻标题、原文摘要；如有必要，可参考原文正文前 1 到 2 段，先把新闻原始主张交代清楚，再结合事实核查信息展开解释。
+5. 正文整体顺序应优先为：热传说法 -> 公开能确认什么 -> 证据缺口或边界 -> 结论。
+1. 行文流畅，不要有割裂感。采用'剥洋葱'逻辑，不要机械罗列，要通过逻辑递进让真相自然浮现。
+2. 叙事要有逻辑链：先给结论，再给证据，再给边界或不确定点。
+3. 文风统一为公众号通俗易懂风格：自然、克制、易懂；不要口语化表达，不要书面官样句。
+4. 逻辑链条：顺序固定为：【summary结论前置】 -> 【key_point证据展开】 -> 【explain边界提醒】。transition 可选，仅在确有必要时补一句自然承接。
+5. 术语可读：专业词/缩写/英文术语首次出现必须给白话解释，且必须自然融入语境。格式建议“术语=大白话解释（20字内）”。
+6. 不要出现 claim_id、verdict、citation_ids、e1/e2 等内部字段名。
+7. transition 写法必须自然，禁止使用“下一步看/接下来我们看/然后看/再看”等模板化预告句式。
+8. 句间衔接要求：key_point 与 explain 要形成同一条叙事链，优先使用“这也意味着/但问题在于/更关键的是/放回原场景看”等自然连接，不要写成口播提纲。
+9. 每节尽量控制为一个核心段落，避免一短句一换段造成断裂感。
+10. 不要输出多余字段。
 
 新闻标题：{item.headline}
 新闻来源：{item.source}
 原文摘要：{item.warning}
+原文正文前两段：{json.dumps(item.expanded_body[:2], ensure_ascii=False)}
 事实核查：{json.dumps(fact_check.model_dump(), ensure_ascii=False)}
 现有社交文案：{writer.social_caption}
 """.strip()
@@ -591,16 +605,59 @@ web_research_notes：{json.dumps(web_research.notes, ensure_ascii=False)}
                 if not isinstance(section, dict):
                     continue
                 heading = str(section.get("heading") or "").strip()
-                content = str(section.get("content") or "").strip()
-                if not (heading and content):
+                summary = str(section.get("summary") or "").strip()
+                key_point = str(section.get("key_point") or "").strip()
+                explain = str(section.get("explain") or "").strip()
+                transition = str(section.get("transition") or "").strip()
+                legacy_content = str(section.get("content") or "").strip()
+                if not heading:
                     continue
-                normalized_sections.append({"heading": heading, "content": content})
+                if not (summary or key_point or explain or transition):
+                    if legacy_content:
+                        legacy_lines = [line.strip() for line in re.split(r"(?<=[。！？!?；;])\s*", legacy_content) if line.strip()]
+                        summary = legacy_lines[0] if len(legacy_lines) >= 1 else ""
+                        key_point = legacy_lines[1] if len(legacy_lines) >= 2 else ""
+                        explain = " ".join(legacy_lines[2:-1]).strip() if len(legacy_lines) > 3 else (legacy_lines[2] if len(legacy_lines) == 3 else "")
+                        transition = legacy_lines[-1] if len(legacy_lines) >= 2 else ""
+                    else:
+                        continue
+                normalized_sections.append(
+                    {
+                        "heading": heading,
+                        "summary": summary,
+                        "key_point": key_point,
+                        "explain": explain,
+                        "transition": transition,
+                        "content": legacy_content,
+                    }
+                )
 
         if not normalized_sections:
             normalized_sections = [
-                {"heading": "这条新闻在说什么", "content": str(item.warning).strip()},
-                {"heading": "核查后能确认什么", "content": "目前公开信息不足以支持这条爆料中的关键结论，多个核心说法缺少可核验证据。"},
-                {"heading": "读者该怎么判断", "content": "先看是否有官方披露与可追溯证据，再判断是否存在标题夸张和因果跳跃。"},
+                {
+                    "heading": "这条新闻在说什么",
+                    "summary": "先把新闻说法拆开看。",
+                    "key_point": str(item.warning).strip()[:80],
+                    "explain": "先区分传闻原句和可公开验证的信息，再判断真假边界。",
+                    "transition": "",
+                    "content": "",
+                },
+                {
+                    "heading": "核查后能确认什么",
+                    "summary": "目前没有足够公开证据支持核心结论。",
+                    "key_point": "多个关键说法缺少可追溯出处或一手记录。",
+                    "explain": "这不等于证伪，而是证据链暂时不闭合。",
+                    "transition": "",
+                    "content": "",
+                },
+                {
+                    "heading": "读者该怎么判断",
+                    "summary": "先看来源，再看证据，再看措辞强度。",
+                    "key_point": "优先官方披露、原始记录和可交叉验证材料。",
+                    "explain": "遇到绝对化标题和因果跳跃，先降低信任等级。",
+                    "transition": "",
+                    "content": "",
+                },
             ]
 
         title = str(payload.get("title") or writer.headline or item.headline).strip()
