@@ -11,6 +11,7 @@ from demo_backend.models import Claim, ClaimEvidenceBundle, ExtractedPage, Issue
 
 class WebResearchService:
     SEARCH_URL = "https://api.bochaai.com/v1/web-search"
+    QIANFAN_SEARCH_URL = "https://qianfan.baidubce.com/v2/ai_search/chat/completions"
     OFFICIAL_DOMAINS = (
         ".gov.cn",
         ".gov",
@@ -50,16 +51,26 @@ class WebResearchService:
 
     def __init__(self, settings: Settings):
         self.settings = settings
+        self._runtime_notes: list[str] = []
 
     async def run(self, item: IssueItem, research: ResearchResult) -> WebResearchResult:
+        primary_provider = self._normalize_provider(self.settings.factcheck_search_provider)
+        provider_chain = self._build_provider_chain()
         if not self.settings.factcheck_enable_web_search:
-            return WebResearchResult(status="pending_config", provider="bocha", notes=["FACTCHECK_ENABLE_WEB_SEARCH=false，联网检索已关闭。"])
-        if (self.settings.factcheck_search_provider or "").strip().lower() != "bocha":
-            return WebResearchResult(status="pending_config", provider="bocha", notes=["当前仅支持 FACTCHECK_SEARCH_PROVIDER=bocha。"])
-        if not self.settings.bocha_api_key.strip():
-            return WebResearchResult(status="pending_config", provider="bocha", notes=["缺少 BOCHA_API_KEY，已跳过联网检索。"])
+            return WebResearchResult(
+                status="pending_config",
+                provider=primary_provider,
+                notes=["FACTCHECK_ENABLE_WEB_SEARCH=false，联网检索已关闭。"],
+            )
+        if not provider_chain:
+            return WebResearchResult(
+                status="pending_config",
+                provider=primary_provider,
+                notes=[self._build_missing_provider_message(primary_provider)],
+            )
 
         bundles: list[ClaimEvidenceBundle] = []
+        self._runtime_notes = []
         notes: list[str] = []
         has_failure = False
         for claim in research.claims:
@@ -79,7 +90,13 @@ class WebResearchService:
                     )
                 )
         status = "partial_failure" if has_failure else "generated"
-        return WebResearchResult(status=status, provider="bocha", claim_evidence=bundles, notes=notes)
+        notes.extend(self._runtime_notes)
+        return WebResearchResult(
+            status=status,
+            provider=" -> ".join(provider_chain),
+            claim_evidence=bundles,
+            notes=notes,
+        )
 
     async def collect_claim_evidence(self, claim: Claim, item: IssueItem, queries: list[str] | None = None) -> ClaimEvidenceBundle:
         normalized_queries = queries or self.build_queries_for_claim(claim, item)
@@ -177,32 +194,31 @@ class WebResearchService:
 
         all_hits: list[SearchHit] = []
         seen_urls: set[str] = set()
+        provider_chain = self._build_provider_chain()
+        if not provider_chain:
+            raise RuntimeError(self._build_missing_provider_message(self._normalize_provider(self.settings.factcheck_search_provider)))
         for query in queries:
-            payload = {
-                "query": query,
-                "summary": True,
-                "count": max(1, int(self.settings.factcheck_max_results_per_query or 5)),
-            }
-            if self.settings.factcheck_news_only:
-                payload["freshness"] = "noLimit"
-            async with httpx.AsyncClient(timeout=60.0) as client:
-                response = await client.post(
-                    self.SEARCH_URL,
-                    headers={
-                        "Authorization": f"Bearer {self.settings.bocha_api_key.strip()}",
-                        "Content-Type": "application/json",
-                    },
-                    json=payload,
-                )
+            data = None
+            provider_used = ""
+            last_error: Exception | None = None
+            for provider in provider_chain:
                 try:
-                    response.raise_for_status()
-                except httpx.HTTPStatusError as exc:
-                    response_body = response.text.strip()
-                    if response_body:
-                        raise RuntimeError(f"query={query}，HTTP {response.status_code}，响应内容：{response_body}") from exc
-                    raise RuntimeError(f"query={query}，HTTP {response.status_code}") from exc
-                data = response.json()
-            for hit in self._parse_search_hits(claim, item, query, data):
+                    data = await self._search_single_query(provider, query)
+                    provider_used = provider
+                    break
+                except Exception as exc:
+                    last_error = exc
+                    if provider != provider_chain[-1]:
+                        self._runtime_notes.append(
+                            f"query={query} 使用 {provider} 检索失败，已自动切换到 {provider_chain[provider_chain.index(provider) + 1]}：{self._format_exception_message(exc)}"
+                        )
+                        continue
+                    raise
+            if data is None:
+                if last_error:
+                    raise last_error
+                continue
+            for hit in self._parse_search_hits(provider_used, claim, item, query, data):
                 if hit.url in seen_urls:
                     continue
                 seen_urls.add(hit.url)
@@ -210,7 +226,81 @@ class WebResearchService:
         all_hits.sort(key=lambda value: value.score, reverse=True)
         return all_hits
 
-    def _parse_search_hits(self, claim: Claim, item: IssueItem, query: str, payload: dict) -> list[SearchHit]:
+    async def _search_single_query(self, provider: str, query: str) -> dict:
+        if provider == "bocha":
+            return await self._search_single_query_via_bocha(query)
+        if provider == "baidu":
+            return await self._search_single_query_via_baidu(query)
+        raise RuntimeError(f"暂不支持的联网检索 provider：{provider}")
+
+    async def _search_single_query_via_bocha(self, query: str) -> dict:
+        payload = {
+            "query": query,
+            "summary": True,
+            "count": max(1, int(self.settings.factcheck_max_results_per_query or 5)),
+        }
+        if self.settings.factcheck_news_only:
+            payload["freshness"] = "noLimit"
+        async with httpx.AsyncClient(timeout=60.0) as client:
+            response = await client.post(
+                self.SEARCH_URL,
+                headers={
+                    "Authorization": f"Bearer {self.settings.bocha_api_key.strip()}",
+                    "Content-Type": "application/json",
+                },
+                json=payload,
+            )
+            return self._raise_for_search_error(response, provider="bocha", query=query)
+
+    async def _search_single_query_via_baidu(self, query: str) -> dict:
+        payload = {
+            "messages": [{"content": query, "role": "user"}],
+            "stream": False,
+            "model": self.settings.qianfan_search_model.strip() or "ernie-4.5-turbo-32k",
+            "search_source": self.settings.qianfan_search_source.strip() or "baidu_search_v2",
+            "resource_type_filter": [
+                {
+                    "type": "web",
+                    "top_k": max(1, min(int(self.settings.factcheck_max_results_per_query or 5), 20)),
+                }
+            ],
+            "search_mode": "required",
+            "enable_deep_search": False,
+            "enable_followup_queries": False,
+            "enable_corner_markers": False,
+        }
+        if self.settings.factcheck_news_only:
+            payload["search_recency_filter"] = "year"
+        async with httpx.AsyncClient(timeout=60.0) as client:
+            response = await client.post(
+                self.QIANFAN_SEARCH_URL,
+                headers={
+                    "Authorization": f"Bearer {self.settings.qianfan_api_key.strip()}",
+                    "X-Appbuilder-Authorization": f"Bearer {self.settings.qianfan_api_key.strip()}",
+                    "Content-Type": "application/json",
+                },
+                json=payload,
+            )
+            return self._raise_for_search_error(response, provider="baidu", query=query)
+
+    def _raise_for_search_error(self, response: httpx.Response, provider: str, query: str) -> dict:
+        try:
+            response.raise_for_status()
+        except httpx.HTTPStatusError as exc:
+            response_body = response.text.strip()
+            if response_body:
+                raise RuntimeError(f"provider={provider}，query={query}，HTTP {response.status_code}，响应内容：{response_body}") from exc
+            raise RuntimeError(f"provider={provider}，query={query}，HTTP {response.status_code}") from exc
+        data = response.json()
+        if isinstance(data, dict) and str(data.get("code") or "").strip():
+            message = str(data.get("message") or "").strip() or "未知错误"
+            raise RuntimeError(f"provider={provider}，query={query}，code={data.get('code')}，message={message}")
+        return data
+
+    def _parse_search_hits(self, provider: str, claim: Claim, item: IssueItem, query: str, payload: dict) -> list[SearchHit]:
+        if provider == "baidu":
+            return self._parse_baidu_search_hits(claim, item, query, payload)
+
         candidate_lists = [
             payload.get("data", {}).get("webPages", {}).get("value") if isinstance(payload.get("data"), dict) else None,
             payload.get("webPages", {}).get("value") if isinstance(payload.get("webPages"), dict) else None,
@@ -268,6 +358,59 @@ class WebResearchService:
                     source_type=source_type,
                     content_quality=content_quality,
                     evidence_signal=evidence_signal,
+                )
+            )
+        return hits
+
+    def _parse_baidu_search_hits(self, claim: Claim, item: IssueItem, query: str, payload: dict) -> list[SearchHit]:
+        records = payload.get("references")
+        if not isinstance(records, list):
+            return []
+
+        hits: list[SearchHit] = []
+        for record in records:
+            if not isinstance(record, dict):
+                continue
+            if str(record.get("type") or "").strip().lower() != "web":
+                continue
+            url = str(record.get("url") or "").strip()
+            title = str(record.get("title") or "").strip()
+            snippet = self._clean_summary_or_snippet(record.get("content"))
+            if not (url and title):
+                continue
+            domain = urlparse(url).netloc.lower()
+            source_type = self._infer_source_type(domain)
+            publisher = str(record.get("web_anchor") or domain or "").strip()
+            published_at = str(record.get("date") or "").strip()
+            score = self._score_hit(
+                claim=claim,
+                item=item,
+                title=title,
+                summary="",
+                snippet=snippet,
+                domain=domain,
+                query=query,
+                source_type=source_type,
+                published_at=published_at,
+            )
+            hits.append(
+                SearchHit(
+                    query=query,
+                    title=title,
+                    url=url,
+                    snippet=snippet,
+                    summary="",
+                    publisher=publisher,
+                    published_at=published_at,
+                    domain=domain,
+                    language="zh-CN",
+                    score=score,
+                    source_type=source_type,
+                    content_quality="snippet" if snippet else "empty",
+                    evidence_signal=self._build_evidence_signal(
+                        source_type=source_type,
+                        content_quality="snippet" if snippet else "empty",
+                    ),
                 )
             )
         return hits
@@ -479,6 +622,41 @@ class WebResearchService:
     def _format_exception_message(self, exc: Exception) -> str:
         message = str(exc).strip()
         return message or exc.__class__.__name__
+
+    def _normalize_provider(self, value: str) -> str:
+        normalized = str(value or "").strip().lower()
+        if normalized in {"qianfan", "baidu", "baidu_search"}:
+            return "baidu"
+        if normalized == "bocha":
+            return "bocha"
+        return normalized
+
+    def _build_provider_chain(self) -> list[str]:
+        providers: list[str] = []
+        for raw_provider in (
+            self.settings.factcheck_search_provider,
+            self.settings.factcheck_fallback_provider,
+        ):
+            provider = self._normalize_provider(raw_provider)
+            if not provider or provider in providers:
+                continue
+            if self._provider_is_configured(provider):
+                providers.append(provider)
+        return providers
+
+    def _provider_is_configured(self, provider: str) -> bool:
+        if provider == "bocha":
+            return bool(self.settings.bocha_api_key.strip())
+        if provider == "baidu":
+            return bool(self.settings.qianfan_api_key.strip())
+        return False
+
+    def _build_missing_provider_message(self, provider: str) -> str:
+        if provider == "baidu":
+            return "缺少 QIANFAN_API_KEY，且没有可用的 fallback provider，已跳过联网检索。"
+        if provider == "bocha":
+            return "缺少 BOCHA_API_KEY，且没有可用的 fallback provider，已跳过联网检索。"
+        return f"FACTCHECK_SEARCH_PROVIDER={provider or '空'} 未配置可用的 API Key，已跳过联网检索。"
     def _count_independent_hits_by_type(self, hits: list[SearchHit], target_type: str) -> int:
         keys: set[tuple[str, str]] = set()
         seen_content: set[str] = set()

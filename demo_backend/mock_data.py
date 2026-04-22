@@ -184,7 +184,7 @@ def build_mock_issue() -> IssuePayload:
             cover_image=item.cover_url,
             expanded_body=item.raw.get("brief", {}).get("paragraphs", [item.summary]),
         )
-        for item in MOCK_NEWS_ITEMS_3
+        for item in MOCK_NEWS_ITEMS_5
     ]
 
     return IssuePayload(

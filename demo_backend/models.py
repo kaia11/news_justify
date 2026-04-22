@@ -169,6 +169,9 @@ class EpisodeImage(BaseModel):
     image_theme: str
     bottom_caption: str = ""
     image_prompt: str
+    original_image_prompt: str = ""
+    safe_retry_prompt: str = ""
+    used_safe_retry: bool = False
     final_image_url: str
     local_image_path: str = ""
     generation_status: str = "pending"
@@ -178,6 +181,9 @@ class EpisodeImage(BaseModel):
 class ImageResult(BaseModel):
     status: StageStatus
     image_prompt: str
+    original_image_prompt: str = ""
+    safe_retry_prompt: str = ""
+    used_safe_retry: bool = False
     final_image_url: str
     episode_images: list[EpisodeImage] = Field(default_factory=list)
 

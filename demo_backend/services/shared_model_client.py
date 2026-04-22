@@ -17,6 +17,7 @@ class ModelRuntimeConfig:
     base_url: str
     api_key: str
     model_name: str
+    timeout_seconds: float
 
 
 STAGE_RESEARCH = "research"
@@ -120,7 +121,13 @@ class SharedModelClient:
             ],
             "temperature": temperature,
         }
-        response = await self._post_json(config.base_url, "/chat/completions", payload, config.api_key)
+        response = await self._post_json(
+            config.base_url,
+            "/chat/completions",
+            payload,
+            config.api_key,
+            timeout_seconds=config.timeout_seconds,
+        )
         return self._extract_text_content(response)
 
     async def _generate_json_with_config(
@@ -139,7 +146,13 @@ class SharedModelClient:
             "temperature": temperature,
             "response_format": {"type": "json_object"},
         }
-        response = await self._post_json(config.base_url, "/chat/completions", payload, config.api_key)
+        response = await self._post_json(
+            config.base_url,
+            "/chat/completions",
+            payload,
+            config.api_key,
+            timeout_seconds=config.timeout_seconds,
+        )
         text = self._extract_text_content(response)
         return self._parse_json_text(text)
 
@@ -154,13 +167,20 @@ class SharedModelClient:
 
         if self._is_dashscope_image_model(config):
             try:
-                return await self._generate_dashscope_image(config, prompt, width, height, reference_image_path)
+                response = await self._generate_dashscope_image(config, prompt, width, height, reference_image_path)
+                response.setdefault("original_prompt", prompt)
+                response.setdefault("safe_retry_prompt", "")
+                response.setdefault("used_safe_retry", False)
+                return response
             except RuntimeError as exc:
                 if not self._is_dashscope_content_filter_error(exc):
                     raise
 
                 safer_prompt = self._build_dashscope_safe_retry_prompt(prompt)
                 response = await self._generate_dashscope_image(config, safer_prompt, width, height, reference_image_path)
+                response["original_prompt"] = prompt
+                response["safe_retry_prompt"] = safer_prompt
+                response["used_safe_retry"] = True
                 if not response.get("revised_prompt"):
                     response["revised_prompt"] = safer_prompt
                 return response
@@ -170,8 +190,18 @@ class SharedModelClient:
             "prompt": prompt,
             "size": f"{width}x{height}",
         }
-        response = await self._post_json(config.base_url, "/images/generations", payload, config.api_key)
-        return self._extract_image_content(response)
+        response = await self._post_json(
+            config.base_url,
+            "/images/generations",
+            payload,
+            config.api_key,
+            timeout_seconds=config.timeout_seconds,
+        )
+        result = self._extract_image_content(response)
+        result.setdefault("original_prompt", prompt)
+        result.setdefault("safe_retry_prompt", "")
+        result.setdefault("used_safe_retry", False)
+        return result
 
     async def _generate_dashscope_image(
         self,
@@ -220,6 +250,7 @@ class SharedModelClient:
                 "/api/v1/services/aigc/multimodal-generation/generation",
                 payload,
                 config.api_key,
+                timeout_seconds=config.timeout_seconds,
             )
             return self._extract_dashscope_multimodal_image_content(response)
 
@@ -238,6 +269,7 @@ class SharedModelClient:
             "/api/v1/services/aigc/text2image/image-synthesis",
             payload,
             config.api_key,
+            timeout_seconds=config.timeout_seconds,
             extra_headers={"X-DashScope-Async": "enable"},
         )
         task_id = str(task.get("output", {}).get("task_id") or "")
@@ -278,12 +310,13 @@ class SharedModelClient:
             "/api/v1/services/aigc/multimodal-generation/generation",
             payload,
             api_key,
+            timeout_seconds=self._normalize_timeout_seconds(self.settings.text_model_timeout_seconds),
         )
         return self._extract_dashscope_multimodal_image_content(response)
 
     async def _poll_dashscope_task(self, api_root: str, api_key: str, task_id: str) -> dict[str, Any]:
         last_payload: dict[str, Any] = {}
-        async with httpx.AsyncClient(timeout=120.0) as client:
+        async with httpx.AsyncClient(timeout=self._normalize_timeout_seconds(self.settings.text_model_timeout_seconds)) as client:
             for _ in range(180):
                 response = await client.get(
                     f"{api_root.rstrip('/')}/api/v1/tasks/{task_id}",
@@ -312,6 +345,7 @@ class SharedModelClient:
         path: str,
         payload: dict[str, Any],
         api_key: str,
+        timeout_seconds: float,
         extra_headers: dict[str, str] | None = None,
     ) -> dict[str, Any]:
         url = f"{base_url.rstrip('/')}{path}"
@@ -321,7 +355,7 @@ class SharedModelClient:
         }
         if extra_headers:
             headers.update(extra_headers)
-        async with httpx.AsyncClient(timeout=120.0) as client:
+        async with httpx.AsyncClient(timeout=self._normalize_timeout_seconds(timeout_seconds)) as client:
             response = await client.post(url, json=payload, headers=headers)
             try:
                 response.raise_for_status()
@@ -343,7 +377,7 @@ class SharedModelClient:
         return (
             "参考输入图片中的线条小狗形象，生成一张温和、卡通化、象征性的新闻解释插画。"
             "画面聚焦当前单张图片的核心信息，用资料卡片、便签、手机屏幕、简化图表和小道具表达。"
-            "只保留非常少量、简短、中性的中文提示，不出现夸张大字标题，不出现具体人名、机构名、巨额损失数字、"
+            "不需要出现任何任何文字"
             "政治人物肖像、警报、爆炸、崩塌、火焰、惊恐人群、灾难现场或强刺激措辞。"
             "整体保持暖色调、简洁线稿、表情生动、非写实、手机端阅读友好。"
         )
@@ -495,6 +529,7 @@ class SharedModelClient:
             self.settings.dashscope_base_url,
             self.settings.dashscope_api_key,
             self.settings.dashscope_text_model,
+            self.settings.text_model_timeout_seconds,
         )
         if dashscope_config:
             return dashscope_config
@@ -504,12 +539,14 @@ class SharedModelClient:
                 self.settings.shared_model_base_url,
                 self.settings.shared_model_api_key,
                 self.settings.shared_model_name,
+                self.settings.text_model_timeout_seconds,
             )
 
         return self._build_config(
             self.settings.text_model_base_url,
             self.settings.text_model_api_key,
             self.settings.text_model_name,
+            self.settings.text_model_timeout_seconds,
         )
 
     def _get_text_config_for_stage(self, stage: str) -> ModelRuntimeConfig | None:
@@ -518,7 +555,7 @@ class SharedModelClient:
             transport = self._get_text_transport()
             if transport:
                 base_url, api_key = transport
-                return self._build_config(base_url, api_key, stage_model_name)
+                return self._build_config(base_url, api_key, stage_model_name, self._get_stage_timeout_seconds(stage))
         return self._get_text_config()
 
     def _get_text_transport(self) -> tuple[str, str] | None:
@@ -562,6 +599,7 @@ class SharedModelClient:
             self.settings.dashscope_base_url,
             self.settings.dashscope_api_key,
             self.settings.dashscope_image_model,
+            self.settings.text_model_timeout_seconds,
         )
         if dashscope_image_config:
             return dashscope_image_config
@@ -572,15 +610,17 @@ class SharedModelClient:
                 self.settings.shared_model_base_url,
                 self.settings.shared_model_api_key,
                 image_model_name,
+                self.settings.text_model_timeout_seconds,
             )
 
         return self._build_config(
             self.settings.image_model_base_url,
             self.settings.image_model_api_key,
             self.settings.image_model_name,
+            self.settings.text_model_timeout_seconds,
         )
 
-    def _build_config(self, base_url: str, api_key: str, model_name: str) -> ModelRuntimeConfig | None:
+    def _build_config(self, base_url: str, api_key: str, model_name: str, timeout_seconds: float) -> ModelRuntimeConfig | None:
         normalized_base_url = str(base_url or "").strip().rstrip("/")
         normalized_api_key = str(api_key or "").strip()
         normalized_model_name = str(model_name or "").strip()
@@ -590,7 +630,25 @@ class SharedModelClient:
             base_url=normalized_base_url,
             api_key=normalized_api_key,
             model_name=normalized_model_name,
+            timeout_seconds=self._normalize_timeout_seconds(timeout_seconds),
         )
+
+    def _get_stage_timeout_seconds(self, stage: str) -> float:
+        timeout_map = {
+            STAGE_RESEARCH: self.settings.model_research_timeout_seconds,
+            STAGE_FACTCHECK: self.settings.model_factcheck_timeout_seconds,
+            STAGE_WRITER: self.settings.model_writer_timeout_seconds,
+            STAGE_IMAGE_PROMPT: self.settings.model_image_prompt_timeout_seconds,
+            STAGE_WECHAT_ARTICLE: self.settings.model_wechat_article_timeout_seconds,
+        }
+        return self._normalize_timeout_seconds(timeout_map.get(stage, self.settings.text_model_timeout_seconds))
+
+    def _normalize_timeout_seconds(self, value: float | int | None) -> float:
+        try:
+            normalized = float(value or 0)
+        except (TypeError, ValueError):
+            normalized = 0.0
+        return normalized if normalized > 0 else 120.0
 
     def _is_dashscope_image_model(self, config: ModelRuntimeConfig) -> bool:
         if not self.settings.dashscope_api_key:
@@ -606,11 +664,11 @@ class SharedModelClient:
 
     def _uses_dashscope_multimodal_sync(self, model_name: str) -> bool:
         normalized = model_name.lower()
-        return normalized.startswith("qwen-image-2") or normalized.startswith("wan2.7-image")
+        return normalized.startswith("qwen-image") or normalized.startswith("wan2.7-image")
 
     def _supports_inline_reference_image(self, model_name: str) -> bool:
         normalized = model_name.lower()
-        return normalized.startswith("qwen-image-2") or normalized.startswith("wan2.7-image")
+        return normalized.startswith("qwen-image") or normalized.startswith("wan2.7-image")
 
     def _normalize_dashscope_size(self, width: int, height: int) -> tuple[int, int]:
         safe_width = min(max(int(width), 512), 1440)
