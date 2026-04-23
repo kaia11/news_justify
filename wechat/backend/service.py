@@ -398,46 +398,154 @@ class WechatPublishService:
         risk_notes: list[str],
         body_image_urls: list[str],
     ) -> str:
-        article_title = self._escape_html(str(wechat_article.get("title") or title))
-        lead = self._escape_html(str(wechat_article.get("lead") or social_caption))
-        ending = self._escape_html(str(wechat_article.get("ending") or ""))
-        wrapper_style = "max-width:760px;margin:0 auto;font-size:17px;line-height:1.85;color:#1f2329;"
-        h1_style = "font-size:32px;line-height:1.35;margin:0 0 16px;font-weight:700;color:#111827;"
-        h2_style = "font-size:24px;line-height:1.45;margin:26px 0 10px;font-weight:700;color:#111827;border-left:4px solid #1d4ed8;padding-left:10px;"
-        p_style = "font-size:17px;line-height:1.85;margin:12px 0;color:#1f2329;"
-        img_style = "display:block;width:100%;height:auto;border-radius:8px;margin:16px 0;"
-        sections = [
-            f"<div style=\"{wrapper_style}\">",
-            f"<p style=\"{p_style}\"><strong style=\"font-weight:700;color:#111827;\">来源：</strong>{self._escape_html(source_name)}</p>",
-            f"<p style=\"{p_style}\">{lead}</p>",
-        ]
-        for image_url in body_image_urls:
-            sections.append(f'<p style="{p_style}"><img style="{img_style}" src="{image_url}" /></p>')
+        lead = self._escape_html(self._strip_markdown_emphasis(str(wechat_article.get("lead") or social_caption)))
+        ending = self._escape_html(self._strip_markdown_emphasis(str(wechat_article.get("ending") or "")))
+
+        wrapper_style = "max-width:760px;margin:0 auto;background:#F3F3F3;padding:24px 20px;color:#3D3F43;font-size:16px;line-height:1.95;font-family:'PingFang SC','Hiragino Sans GB','Microsoft YaHei','Helvetica Neue',Arial,sans-serif;"
+        paragraph_style = "margin:0 0 28px;"
+        paragraph_last_style = "margin:0 0 56px;"
+        chapter_no_style = "margin:0 0 28px;font-family:Georgia,'Times New Roman',serif;font-size:46px;line-height:1;color:#3D3F43;"
+        title_bar_style = "display:inline-block;margin:0 0 28px;background:#35383E;color:#FFFFFF;font-size:20px;line-height:1.45;padding:5px 9px;"
+        highlight_style = "border-bottom:2px dashed #7FE0B0;"
+        image_style = "display:block;width:100%;height:auto;border-radius:8px;"
+
+        sections = [f"<div style=\"{wrapper_style}\">", f"<p style=\"{paragraph_style}\">{lead}</p>"]
+
+        for idx, image_url in enumerate(body_image_urls):
+            p_style = paragraph_last_style if idx == len(body_image_urls) - 1 else paragraph_style
+            sections.append(f'<p style="{p_style}"><img style="{image_style}" src="{image_url}" /></p>')
 
         article_sections = wechat_article.get("sections")
         if isinstance(article_sections, list):
             for index, section in enumerate(article_sections, start=1):
                 if not isinstance(section, dict):
                     continue
-                heading = self._escape_html(str(section.get("heading") or f"观点 {index}"))
-                content = self._escape_html(str(section.get("content") or ""))
-                sections.append(f"<h2 style=\"{h2_style}\">{heading}</h2>")
-                if content:
-                    sections.append(f"<p style=\"{p_style}\">{content}</p>")
 
-        if context_notes:
-            sections.append(f"<h2 style=\"{h2_style}\">补充背景</h2>")
-            for note in context_notes:
-                sections.append(f"<p style=\"{p_style}\">{self._escape_html(note)}</p>")
-        if risk_notes:
-            sections.append(f"<h2 style=\"{h2_style}\">风险提示</h2>")
-            for note in risk_notes:
-                sections.append(f"<p style=\"{p_style}\">{self._escape_html(note)}</p>")
+                chapter_no = f"{index:02d}"
+                heading = self._escape_html(self._strip_markdown_emphasis(str(section.get("heading") or f"观点 {index}")))
+                sections.append(f"<p style=\"{chapter_no_style}\">{chapter_no}</p>")
+                sections.append(f"<p style=\"{title_bar_style}\">{heading}</p>")
+
+                summary = self._strip_markdown_emphasis(str(section.get("summary") or "").strip())
+                key_point = self._strip_markdown_emphasis(str(section.get("key_point") or "").strip())
+                explain = self._strip_markdown_emphasis(str(section.get("explain") or "").strip())
+                transition = self._strip_markdown_emphasis(str(section.get("transition") or "").strip())
+                legacy_content = self._strip_markdown_emphasis(str(section.get("content") or "").strip())
+                sentence_endings = ("。", "！", "？", "；", ";")
+
+                content_rows: list[tuple[str, bool]] = []
+                if summary:
+                    content_rows.append((summary, True))
+
+                body_parts: list[str] = []
+                if key_point:
+                    body_parts.append(key_point)
+                if explain:
+                    for line in self._split_section_lines(explain):
+                        normalized_line = self._strip_markdown_emphasis(line.strip())
+                        if not normalized_line:
+                            continue
+                        term_hint = self._split_term_hint_line(normalized_line)
+                        if term_hint:
+                            term, explain_text = term_hint
+                            body_parts.append(f"{term}：{explain_text}")
+                        else:
+                            body_parts.append(normalized_line)
+                transition_line = ""
+                if transition:
+                    transition_line = re.sub(
+                        r"^(下一步看|接下来(?:我们)?看|再看|然后看|继续看|下一个问题|下一段)\s*[：:，,\s]*",
+                        "",
+                        transition.strip(),
+                    ).strip()
+
+                if body_parts:
+                    merged_body = ""
+                    for part in body_parts:
+                        text_part = part.strip()
+                        if not text_part:
+                            continue
+                        if merged_body and not merged_body.endswith(sentence_endings):
+                            merged_body += "。"
+                        merged_body += text_part
+                    if merged_body and not merged_body.endswith(sentence_endings):
+                        merged_body += "。"
+                    if merged_body:
+                        content_rows.append((merged_body, False))
+                if transition_line:
+                    if not transition_line.endswith(sentence_endings):
+                        transition_line += "。"
+                    content_rows.append((transition_line, False))
+
+                if not content_rows and legacy_content:
+                    for line in self._split_section_lines(legacy_content):
+                        normalized_line = self._strip_markdown_emphasis(line.strip())
+                        if not normalized_line:
+                            continue
+                        is_highlight = "【重点】" in normalized_line
+                        text_line = normalized_line.replace("【重点】", "").strip() if is_highlight else normalized_line
+                        if self._is_transition_line(text_line):
+                            text_line = re.sub(
+                                r"^(下一步看|接下来(?:我们)?看|再看|然后看|继续看|下一个问题|下一段)\s*[：:，,\s]*",
+                                "",
+                                text_line,
+                            ).strip()
+                            if not text_line:
+                                continue
+                        term_hint = self._split_term_hint_line(text_line)
+                        if term_hint:
+                            term, explain_text = term_hint
+                            text_line = f"{term}：{explain_text}"
+                        content_rows.append((text_line, is_highlight))
+
+                for row_index, (text, use_highlight) in enumerate(content_rows):
+                    margin_style = paragraph_last_style if row_index == len(content_rows) - 1 else paragraph_style
+                    escaped_text = self._escape_html(text)
+                    if use_highlight:
+                        sections.append(f"<p style=\"{margin_style}\"><span style=\"{highlight_style}\">{escaped_text}</span></p>")
+                    else:
+                        sections.append(f"<p style=\"{margin_style}\">{escaped_text}</p>")
+
         if ending:
-            sections.append(f"<h2 style=\"{h2_style}\">结语</h2>")
-            sections.append(f"<p style=\"{p_style}\">{ending}</p>")
+            sections.append(f"<p style=\"{title_bar_style}\">结语</p>")
+            sections.append(f"<p style=\"margin:0;\"><span style=\"{highlight_style}\">{ending}</span></p>")
         sections.append("</div>")
         return "".join(sections)
+
+    def _split_section_lines(self, content: str) -> list[str]:
+        text = str(content or "").strip()
+        if not text:
+            return []
+        by_newline = [piece.strip() for piece in re.split(r"\n+", text) if piece.strip()]
+        if len(by_newline) > 1:
+            return by_newline
+        return [piece.strip() for piece in re.split(r"(?<=[。！？!?；;])\s*", text) if piece.strip()]
+
+    def _is_transition_line(self, line: str) -> bool:
+        normalized = line.strip()
+        transition_prefixes = ("下一步看", "接下来", "再看", "然后看", "继续看", "下一个问题", "下一段")
+        return any(normalized.startswith(prefix) for prefix in transition_prefixes)
+
+    def _split_term_hint_line(self, line: str) -> tuple[str, str] | None:
+        normalized = line.strip()
+        if "【重点】" in normalized:
+            return None
+        if "=" not in normalized:
+            return None
+        if normalized.count("=") != 1:
+            return None
+        term, explanation = [value.strip() for value in normalized.split("=", 1)]
+        if not (term and explanation):
+            return None
+        if len(term) > 20 or len(explanation) > 60:
+            return None
+        return term, explanation
+
+    def _strip_markdown_emphasis(self, text: str) -> str:
+        normalized = str(text or "")
+        normalized = re.sub(r"\*\*(.*?)\*\*", r"\1", normalized)
+        normalized = re.sub(r"__(.*?)__", r"\1", normalized)
+        return normalized.strip()
 
     async def _publish_article(
         self,

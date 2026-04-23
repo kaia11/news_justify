@@ -32,6 +32,12 @@ class Settings(BaseSettings):
     text_model_base_url: str = ""
     text_model_api_key: str = ""
     text_model_name: str = ""
+    text_model_timeout_seconds: float = 300.0
+    model_research_timeout_seconds: float = 300.0
+    model_factcheck_timeout_seconds: float = 300.0
+    model_writer_timeout_seconds: float = 300.0
+    model_image_prompt_timeout_seconds: float = 300.0
+    model_wechat_article_timeout_seconds: float = 300.0
     model_research_name: str = ""
     model_factcheck_name: str = ""
     model_writer_name: str = ""
@@ -42,8 +48,12 @@ class Settings(BaseSettings):
     image_model_name: str = ""
 
     bocha_api_key: str = ""
+    qianfan_api_key: str = ""
+    qianfan_search_model: str = "ernie-4.5-turbo-32k"
+    qianfan_search_source: str = "baidu_search_v2"
     factcheck_enable_web_search: bool = True
-    factcheck_search_provider: str = "bocha"
+    factcheck_search_provider: str = "baidu"
+    factcheck_fallback_provider: str = "bocha"
     factcheck_max_queries_per_claim: int = 5
     factcheck_max_results_per_query: int = 5
     factcheck_search_lang_mode: str = "auto"

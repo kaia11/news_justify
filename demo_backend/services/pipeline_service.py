@@ -41,9 +41,10 @@ DEBUG_OUTPUT_ROOT = Path(__file__).resolve().parents[1] / "data" / "debug_pipeli
 
 class DemoPipelineService:
     COMIC_STYLE_ANCHOR = (
-        "可爱卡通线条小狗主角，暖色调，简洁线稿，"
+        "可爱卡通小狗主角，小白狗和小金毛，暖色调，简洁线稿，"
         "新闻讲解风格，手机端阅读友好，表情生动，非写实，无复杂背景，"
-        "角色形象尽量参考输入图片中的线条小狗"
+        "角色形象尽量参考输入图片中的小狗"
+        "严格避免生成可能被ai判定为疑似敏感内容，不合适内容的描述。"
     )
 
     def __init__(
@@ -92,7 +93,7 @@ class DemoPipelineService:
         image = await self._build_image(item, writer, storage_item_id)
         debug_artifacts["image"] = self._write_debug_json(storage_item_id, "05_image.json", image.model_dump())
 
-        wechat_article = await self._build_wechat_article(item, fact_check, writer)
+        wechat_article = await self._build_wechat_article(item, research, web_research, writer, fact_check, writer_brief)
         debug_artifacts["wechat_article"] = self._write_debug_json(storage_item_id, "06_wechat_article.json", wechat_article.model_dump())
 
         wechat_publish = await self._build_wechat_publish(issue, item, storage_item_id, writer, fact_check, image, wechat_article)
@@ -114,6 +115,7 @@ class DemoPipelineService:
             "你是新闻研究助手。你的任务不是复述爆料，而是把一条可能半真半假的新闻拆成最值得核查的核心命题。"
             "你要同时识别两类内容：一是新闻声称发生了什么，二是这条新闻本身有哪些可疑结构，例如匿名爆料、绝对化表述、旧闻拼接、把研究讨论夸大成现实事故。"
             "每条 claim 只能表达一个事实点，但不要把同一类近义说法机械拆成很多重复命题。"
+            "严格避免生成可能被ai判定为疑似敏感内容，不合适内容的描述。"
             "你必须只返回 JSON 对象，不要输出 markdown。"
         )
         user_prompt = f"""
@@ -185,6 +187,7 @@ class DemoPipelineService:
             "你是一个新闻事实核查与背景分析助手。"
             "你要逐条检查输入中的最小可核查命题 claims，并区分三件事：这条说法有没有公开证据、这条说法是否混入了真实背景讨论、这条新闻是否存在夸大或误读。"
             "你必须只返回 JSON 对象，不要输出 markdown，不要解释。"
+            "严格避免生成可能被ai判定为疑似敏感内容，不合适内容的描述。"
         )
         evidence_summary = self._build_fact_check_evidence_summary(web_research.claim_evidence)
         user_prompt = f"""
@@ -258,16 +261,18 @@ web_research_notes：{json.dumps(web_research.notes, ensure_ascii=False)}
             "你的重点不是给新闻下真假判词，而是向普通读者解释：这条新闻里的关键说法，目前公开能确认什么、还缺什么、真实背景是什么。"
             "你可以参考 fact_check 的判断来控制表达强度，但 writer 的主要依据必须是网页证据摘要和事实包，而不是 verdict 标签本身。"
             "面向普通读者写作：若出现专业词/缩写/英文术语，必须先用大白话做生词解释，再进行真假判断。"
+            "严格避免生成可能被ai判定为疑似敏感，不合适内容描述。"
             "你必须只返回 JSON 对象，不要输出 markdown。"
         )
         user_prompt = f"""
 请根据下面的信息，生成一个适合“新闻讲解短视频”的漫画分镜脚本 JSON。
 
-你输出的内容要同时满足这两个目标：
+你的输出必须同时满足两个目标：
 1. 明确告诉后续流程，这条内容一共要生成多少张“单格图片”。
 2. 对每一张单格图片，给出独立分镜信息：画面、人物动作、人物台词、旁白和作图提示。
 
-请严格输出以下 JSON 结构，不要增加多余字段：
+一、输出格式
+请严格输出以下 JSON 结构，不要增加多余字段，不要输出 markdown：
 {{
   "headline": "字符串",
   "social_caption": "字符串",
@@ -298,50 +303,75 @@ web_research_notes：{json.dumps(web_research.notes, ensure_ascii=False)}
   ]
 }}
 
-必须遵守以下要求：
+二、整体写作目标
 1. headline 要简短，明确说明漫画在讲“新闻里的关键说法为什么值得怀疑、哪些部分成立、哪些部分没证据”。
 2. social_caption 控制在 120 字以内，要有传播感和趣味性。
-4. 叙事优先级必须是：先讲公开能看到什么，再讲还缺什么关键证据，再讲新闻哪些地方可能说过头了。
-5. 可以参考 fact_check 的判断边界，但不要把 unsupported、uncertain、claim_verdicts、citation_ids、e1-e7 这类内部标签直接写进 headline、旁白、台词、fact_focus 或画面文字。
-6. 如果公开证据不足，要写成“目前公开还看不到”“现在能找到的大多是转述”，不要直接写成“已经证明是假的”。
-7. 如果有真实背景但新闻说过头了，要把“真实背景”和“夸张延伸”分开讲清楚。
-8. 输出必须是单图列表，禁止四宫格/分镜边框/拼图排版；每个 image_index 对应一张独立图片。
-9. 图片总数由信息表达清晰度决定；以讲清事实为第一优先级，不为凑图重复表达。
-10. 面向普通读者：出现专业词/缩写/英文术语（如 WSL2、ROCm、系统性风险、缓存TTL）时，必须先做生词解释，再做真假判断；无生词可直接判断。
-11. 全部图片必须形成强逻辑链路，固定顺序：新闻故事背景（能够让普通读者快速了解事情背景）-> 生词解释（术语=大白话解释）-> 关键词逐个分析。
-11.1 进入“关键说法逐个辨析”后，每个点都必须按固定顺序展开：
-先复述热传内容原本在说什么，（如果这一说法本身就存在夸张或误读，也可以在复述时适当弱化措辞，但必须保留原说法的核心信息）
-再说明目前公开能查到什么，
-最后解释证据缺口、夸张转述或真实背景分别在哪里。
-如果有真实背景讨论，必须单独讲清，不要和真假判断混在一句话里。
-11.2 好的分镜不是“尽量少图”，而是“每张图只讲一个读者能立刻理解的点”。
-如果一张图同时包含“原说法 + 数字来源 + 证据缺口 + 判断结论”，就说明信息过密，必须拆图。
-11.3 对于每个关键说法，优先采用“双图结构”：
-A图：准确复述热传内容原本在说什么；
-B图：说明公开能查到什么、证据缺口在哪里、该如何理解。
-除非该说法极短且信息量极低，否则不得把复述和辨析压缩到同一张图。
-12. 每张图内部叙事顺序固定为：问题 -> 公开信息/证据 -> 通俗解释；禁止跳步。
-13. 台词以“讲述性表达”为主，要求有趣味但克制、通俗易懂；避免判断性语句。
-11. 生词解释要用大白话短句，建议格式“术语=大白话解释（不超过20字）”。
-12. 台词要口语化、像在给普通用户解释新闻，不要像系统汇报。
-13. narration 和 dialogue 要口语化、日常化，避免术语堆叠和系统汇报腔。
-14. 对 uncertain / partially_supported 的内容必须保留谨慎表达，但不要反复堆术语。
-15. bottom_caption 必须是一句放在图片下方的简短图注，用来概括这张图讲的核心点；控制在 10 到 28 个字，口语化、易读、像解释卡片的小结。
-16. visual_prompt 必须适合直接拿去生成图片，并明确描述该单图画面。
-16. bottom_caption 必须前后连贯，整组图读下来能形成连续复盘链。
-17. style_anchor 必须包含这段内容：{self.COMIC_STYLE_ANCHOR}
-18. 画面整体风格统一、适合手机端阅读，信息清楚，情绪有变化，适当带一点轻松感。
-19. 不要输出多余字段，不要输出 markdown。
-20. 允许 characters.dialogue 和 narration 保持较长、口语化、适合阅读的表达。
-21. 长信息优先放入角色对话气泡或旁白，不要把同样内容重复写进场景背景文字。
-22. scene 必须避免要求背景中出现大段可读中文、整页网页截图、官网首页、白板整句、海报式大标题。
-23. 若必须出现文字，每处只保留 2 到 8 个字的短标签，且总文字量尽量少；完整解释优先放在对话、旁白和图片下方图注里。
-24. 避免生成可能被ai判定为疑似敏感内容的描述。
-25. 如果需要表达一句较长信息，优先拆成角色对话或旁白，不要写成角色手里拿着的大字牌子。
-26. 禁止出现斜着印、旋转、透视倾斜、贴纸状、漂浮状的文字块；所有可见文字都应是横向、端正、清晰、短句。
-27. 英文和数字尽量少，能用中文解释就不用英文原词；如必须出现英文，每处只允许 1 到 3 个词，且必须横向排版。
-28. 如果新闻标题带强烈情绪词，写脚本时要自动去情绪化，只保留可核查的事实主张，不要照搬标题腔。
+3. 可以参考 fact_check 的判断边界，但不要把 unsupported、uncertain、claim_verdicts、citation_ids、e1-e7 这类内部标签直接写进 headline、旁白、台词、fact_focus 或画面文字。
+4. 如果公开证据不足，要写成“目前公开还看不到”“现在能找到的大多是转述”，不要直接写成“已经证明是假的”。
+5. 如果有真实背景但新闻说过头了，要把“真实背景”和“夸张延伸”分开讲清楚。
+6. 面向普通读者：出现专业词、缩写、英文术语时，必须先做生词解释，再做真假判断；无生词可直接判断。示例术语包括 WSL2、ROCm、系统性风险、缓存TTL。
+7. 生词解释要用大白话短句，建议格式为“术语=大白话解释（不超过20字）”。
+8. 对 uncertain / partially_supported 对应的内容必须保留谨慎表达，但不要反复堆术语。
+9. 如果新闻标题带强烈情绪词，写脚本时要自动去情绪化，只保留可核查的事实主张，不要照搬标题腔。
 
+三、叙事结构要求
+1. 叙事优先级必须是：先讲公开能看到什么，再讲还缺什么关键证据，再讲新闻哪些地方可能说过头了。
+2. 全部图片必须形成强逻辑链路，固定顺序为：
+   新闻故事背景（让普通读者快速了解事情背景） -> 生词解释（术语=大白话解释） -> 关键词逐个分析。
+3. 进入“关键说法逐个辨析”后，每个点都必须按固定顺序展开：
+   先复述热传内容原本在说什么。
+   如果这一说法本身就存在夸张或误读，可以在复述时适当弱化措辞，但必须保留原说法的核心信息。
+   再说明目前公开能查到什么。
+   最后解释证据缺口、夸张转述或真实背景分别在哪里。
+   如果有真实背景讨论，必须单独讲清，不要和真假判断混在一句话里。
+4. 每张图内部叙事顺序固定为：问题 -> 公开信息/证据 -> 通俗解释；禁止跳步。
+
+四、分镜拆分规则
+1. 输出必须是单图列表，禁止四宫格、分镜边框、拼图排版；每个 image_index 对应一张独立图片。
+2. 图片总数由信息表达清晰度决定；以讲清事实为第一优先级，不为凑图重复表达。
+3. 好的分镜不是“尽量少图”，而是“每张图只讲一个读者能立刻理解的点”。
+4. 如果一张图同时包含“原说法 + 数字来源 + 证据缺口 + 判断结论”，就说明信息过密，必须拆图。
+5. 对于每个关键说法，优先采用“双图结构”：
+   A图：准确复述热传内容原本在说什么。
+   B图：说明公开能查到什么、证据缺口在哪里、该如何理解。
+   除非该说法极短且信息量极低，否则不得把复述和辨析压缩到同一张图。
+
+五、语言风格要求
+1. 台词以“讲述性表达”为主，要求有趣味但克制、通俗易懂；避免判断性语句。
+2. 台词要口语化，像在给普通用户解释新闻，不要像系统汇报。
+3. 允许 characters.dialogue 和 narration 保持较长、口语化、适合阅读的表达，避免术语堆叠和系统汇报腔。
+4. 长信息优先放入角色对话气泡或旁白，不要把同样内容重复写进场景背景文字。
+
+六、画面与字幕要求
+1. bottom_caption 必须是一句放在图片下方的简短图注，用来概括这张图讲的核心点；控制在 10 到 28 个字，口语化、易读、像解释卡片的小结。
+2. 各张图的 bottom_caption 必须前后连贯，整组图读下来能形成连续复盘链。
+3. style_anchor 必须包含这段内容：{self.COMIC_STYLE_ANCHOR}
+4. 画面整体风格统一、适合手机端阅读，信息清楚，情绪有变化，适当带一点轻松感。
+5. visual_prompt 必须适合直接拿去生成图片，并明确描述该单图画面。
+6. 每一张图片最多包含三处整块的文字（例如标题、对话气泡、旁白框），禁止在画面里散落很多小字；如果需要表达较多文字信息，优先放入角色对话气泡或旁白，而不是直接写在场景里。
+8. 严格避免生成可能被 AI 判定为疑似敏感内容，不合适内容的描述。
+9. 如果需要表达一句较长信息，优先拆成角色对话或旁白，不要写成角色手里拿着的大字牌子。对话框等文字框必须为方形。
+10. 禁止出现斜着印、旋转、透视倾斜、贴纸状、漂浮状的文字块；所有可见文字都应是横向、端正、清晰、短句。
+11. 英文和数字尽量少，能用中文解释就不用英文原词；如必须出现英文，每处只允许 1 到 3 个词，且必须横向排版。
+12. 同一张图片中尽量不要出现三个以上的特殊符号，如“#”“@”“%”等；且尽量不要使用表情符号。
+13. 同一张图片中小于或等于两段长文字，每段文字建议 10-28 字，尽量不超过 36 字，不要有空白对话框
+14. 在 scene 和 visual_prompt 中，凡是属于背景装饰、辅助道具、资料贴图、纸带、便签、卡片、屏幕缩略图的元素，一律不得包含可读文字、数字、英文单词或标签。
+15. 如需表达“代码、表格、文档、会议记录、聊天记录”等概念，只能使用抽象图标或无字缩略形状表示，不能直接写出词语本身。
+
+七、语言要求
+- 所有对话：中文
+- 所有旁白：中文
+- 专业术语：中文（English）
+- 标签注释：中文
+- 使用中文标点：""，。！？
+八、避免ip风险
+新闻事实可以保留在脚本语义层，但视觉层默认不用复现专有名词、品牌名、产品名、药名、机构名、人物名。
+如果某个专有名词对新闻理解重要，优先通过“角色对话摘要”表达，不要作为海报大字、包装标签、屏幕标题、logo 或实体物品上的可读文字出现。
+具体对象优先转成泛化视觉符号。
+例如药物新闻用“医疗说明卡、问诊流程图、医生审核图标、抽象药瓶图标”表达，而不是某药名包装。
+图片模型的任务是“画新闻解释场景”，不是“复刻新闻对象本体”。
+凡是可能涉及品牌、商标、论文标题、网页标题、产品界面、药盒标签、封面、logo 的内容，都默认改成无文字占位符或抽象图标。
+若一个事实必须被提到，优先让它出现在旁白输入或角色短对白里，但不要同时出现在背景物件和大标题中，避免模型把它理解成要复刻某个具体 IP/包装/版式。
 
 新闻标题：{item.headline}
 新闻来源：{item.source}
@@ -389,8 +419,35 @@ web_research_notes：{json.dumps(web_research.notes, ensure_ascii=False)}
             story_index = int(image_script.get("image_index") or generated_index)
             panels = image_script.get("panels") if isinstance(image_script.get("panels"), list) else []
             panel = panels[0] if panels and isinstance(panels[0], dict) else {}
-            image_prompt = await self._build_image_prompt(item, writer, image_script, generated_index, panel)
+            image_prompt_request = self._build_image_prompt_request(item, writer, image_script, generated_index, panel)
+            image_prompt = await self.shared_model_client.generate_text_for_stage(
+                "image_prompt",
+                image_prompt_request["system_prompt"],
+                image_prompt_request["user_prompt"],
+            )
+            self._write_debug_json(
+                storage_item_id,
+                f"05a_image_prompt_{generated_index:02d}.json",
+                {
+                    "image_index": generated_index,
+                    "story_index": story_index,
+                    "image_theme": str(image_script.get("image_theme") or f"第{generated_index}张"),
+                    "reference_image_path": reference_image_path,
+                    "width": 1080,
+                    "height": 1440,
+                    "image_prompt_stage_request": image_prompt_request,
+                    "generated_image_prompt": image_prompt,
+                    "panel": panel if isinstance(panel, dict) else {},
+                    "image_script": image_script,
+                },
+            )
             self._mark_story_script_generating(storage_item_id, story_index)
+            self._update_story_script_generation_state(
+                item_id=storage_item_id,
+                image_index=story_index,
+                generation_status="generating",
+                image_prompt=image_prompt,
+            )
             image_result = await self.shared_model_client.generate_image(
                 image_prompt,
                 width=1080,
@@ -399,6 +456,9 @@ web_research_notes：{json.dumps(web_research.notes, ensure_ascii=False)}
             )
             final_image_url = str(image_result.get("final_image_url") or "")
             revised_prompt = str(image_result.get("revised_prompt") or image_prompt)
+            original_prompt = str(image_result.get("original_prompt") or image_prompt)
+            safe_retry_prompt = str(image_result.get("safe_retry_prompt") or "")
+            used_safe_retry = bool(image_result.get("used_safe_retry"))
             local_image_path = await self._save_generated_image(storage_item_id, generated_index, final_image_url)
             self._update_story_script_result(
                 item_id=storage_item_id,
@@ -418,6 +478,9 @@ web_research_notes：{json.dumps(web_research.notes, ensure_ascii=False)}
                     image_theme=str(image_script.get("image_theme") or f"第{generated_index}张"),
                     bottom_caption=str(image_script.get("bottom_caption") or "").strip(),
                     image_prompt=revised_prompt,
+                    original_image_prompt=original_prompt,
+                    safe_retry_prompt=safe_retry_prompt,
+                    used_safe_retry=used_safe_retry,
                     final_image_url=final_image_url,
                     local_image_path=local_image_path,
                     generation_status="generated",
@@ -429,6 +492,9 @@ web_research_notes：{json.dumps(web_research.notes, ensure_ascii=False)}
         return ImageResult(
             status="generated",
             image_prompt=first_prompt,
+            original_image_prompt=str(episode_images[0].original_image_prompt if episode_images else ""),
+            safe_retry_prompt=str(episode_images[0].safe_retry_prompt if episode_images else ""),
+            used_safe_retry=bool(episode_images[0].used_safe_retry if episode_images else False),
             final_image_url=first_url,
             episode_images=episode_images,
         )
@@ -441,6 +507,21 @@ web_research_notes：{json.dumps(web_research.notes, ensure_ascii=False)}
         image_index: int,
         panel: dict[str, Any],
     ) -> str:
+        request_payload = self._build_image_prompt_request(item, writer, image_script, image_index, panel)
+        return await self.shared_model_client.generate_text_for_stage(
+            "image_prompt",
+            request_payload["system_prompt"],
+            request_payload["user_prompt"],
+        )
+
+    def _build_image_prompt_request(
+        self,
+        item: IssueItem,
+        writer: WriterResult,
+        image_script: dict[str, Any],
+        image_index: int,
+        panel: dict[str, Any],
+    ) -> dict[str, str]:
         system_prompt = (
             "你是漫画分镜提示词助手。请根据单格脚本生成一段适合图片模型调用的中文提示词。"
             "重点是单格画面表达清楚，绝对不要输出多格拼图。"
@@ -465,27 +546,31 @@ web_research_notes：{json.dumps(web_research.notes, ensure_ascii=False)}
 要求：
 1. 只生成一张“单格漫画”成品图，不要出现 2x2 拼图排版。
 1.1 绝对禁止出现分镜边框、四宫格、连环画拼接、九宫格、漫画页排版。
-2. 主角固定为输入参考图对应的两只线条小狗：一只小白狗，一只小金毛。
-3. 角色形象尽量参考输入图片中的线条小狗外形和气质。
+2. 主角固定为输入参考图对应的两只小狗：一只小白狗，一只小金毛。
+3. 角色形象尽量参考输入图片中的小狗外形和气质。
 4. 必须严格覆盖本单图脚本中的 scene、dialogue、narration 和 fact_focus，不要遗漏。
 5. 风格锚点必须体现：{self.COMIC_STYLE_ANCHOR}
 6. 画面重点是新闻场景、角色反应、被夸大的标题、缺失的证据、真实背景与误读之间的对比。
 7. 不要把 uncertain、supported、claim、claim_verdicts、citation_ids、e1-e7 等内部术语直接画成大字主视觉。
-8. 完全还原脚本内容。主人公说的话通过对话气泡框表现。另外可以用手机屏幕、便签卡片、资料纸张、标题条等中传递信息。
+8. 尽量还原脚本内容。主人公说的话通过对话气泡框表现。
 8.1 文字内容优先围绕“疑点、证据缺口、核查结论”，避免无关口号。
 8.2 画面下方必须有一条简短图注，内容就是“本张图片下方简述”，做成简洁的小字说明条或说明卡片，一句话即可，不要写成长段字幕。
 8.3 除角色对话、必要短标签和底部图注外，背景环境尽量少出现可读文字，不要做官网首页或整页网页截图。
 9. 不要生成配音、长字幕条、播放器按钮、水印、直播 UI、账号名或复杂英文术语海报。
 10. 新闻讲解风格，手机端阅读友好，表情生动，非写实，无复杂背景。
-11. 只输出最终提示词正文。
-12. 避免生成可能被ai判定为疑似敏感内容的描述。
+11. 只输出最终提示词正文。并且除了必须用英文的专业术语外，全部输出中文
+12. 严格避免生成可能被ai判定为疑似敏感内容的描述。
 13. 禁止任何倾斜文字、旋转文字、透视变形文字、弧形排版文字、印章式斜盖文字。
 14. 所有必须出现的文字都只能横向、平直、工整，像简单标签，不要艺术字，不要海报字。
 15. 不要让角色举着大字海报、打印页、新闻号外、截图卡片；如需表达信息，用角色对话气泡和底部图注完成。
 16. 人物台词必须显示完整，并且只能出现在对话气泡内，对话气泡内文字必须留出明显边距，不能贴边、不能溢出、不能挤成整段海报字。
 17. 对话框不允许重叠，必须保证每段对话有独立空间，避免文字堆叠成一大块。
+18. 对话框与文字框尽量做成方形，避免排版错误。
 """.strip()
-        return await self.shared_model_client.generate_text_for_stage("image_prompt", system_prompt, user_prompt)
+        return {
+            "system_prompt": system_prompt,
+            "user_prompt": user_prompt,
+        }
     async def _build_wechat_publish(
         self,
         issue: IssuePayload,
@@ -535,50 +620,60 @@ web_research_notes：{json.dumps(web_research.notes, ensure_ascii=False)}
     async def _build_wechat_article(
         self,
         item: IssueItem,
-        fact_check: FactCheckResult,
+        research: ResearchResult,
+        web_research: WebResearchResult,
         writer: WriterResult,
+        fact_check: FactCheckResult,
+        writer_brief: dict[str, Any],
     ) -> WechatArticleResult:
         system_prompt = (
-            "你是公众号深度编辑。请把事实核查信息改写成适合微信公众号阅读的解释型正文。"
-            "写作必须满足：谣言与事实明确区分、叙事链路清晰、文风统一、语言精炼、术语可读。"
-            "文风要求：通俗、克制、易懂，避免口语化和书面腔混杂。"
-            "表达要求：短句优先，先结论后解释，删除空话套话。"
-            "术语要求：专业术语首次出现时必须给出白话解释。"
-            "不要输出内部术语标签，不要输出 markdown。你必须只返回 JSON。"
+                "你是一位拥有百万阅读量的深度事实核查号主笔。你擅长剥开谣言伪装，用极具逻辑美感且易读的文字还原真相。"
+                "核心创作准则："
+                "你写的是“先交代热传新闻原始说法，再进入解释与核查”的公众号正文。"
+                "不要一上来直接反驳、下判断或讨论证据缺口，必须先让读者知道这条新闻原本在说什么。"
+                "1. 叙事化拆解：采用'剥洋葱'逻辑，不要机械罗列，要通过逻辑递进让真相自然浮现。"
+                "2. 隐形科普：遇到专业术语（如 LPU、SaaS、API 等）时，禁止使用‘术语=定义’的呆板格式。请将其功能自然融入句子中，让非专业读者也能秒懂。"
+                "3. 语感去油：严禁使用‘综上所述’、‘值得注意的是’、‘首先/其次’等 AI 常用套话。追求节奏感强、冷静克制的短句。"
+                "4. 严谨边界：严格区分‘证伪’与‘证据不足’。对查无实据的事实使用‘未获证实’或‘查无实据’，不主观臆断。 "
         )
         user_prompt = f"""
 请根据输入生成一个 JSON 对象，字段严格如下：
 {{
-  "title": "字符串",
-  "digest": "字符串，120字以内",
-  "lead": "字符串，1段导语",
+  "digest": "字符串，精炼概括传闻/新闻本身（120字以内）",
+  "lead": "字符串，正文导语。精炼概括新闻本身，从当前新闻引发的社会情绪或某个逻辑疑点切入，勾起读者点击欲。",
   "sections": [
     {{
-      "heading": "字符串，小标题",
-      "content": "字符串，2-4句，通俗可读"
+      "heading": "字符串。具有洞察力的小标题",
+      "summary": "字符串。本段结论",
+      "key_point": "字符串。核心数据或关键定性",
+      "explain": "字符串。补充解释（1-2句）",
+      "transition": "字符串，可为空。自然承接下一段，不要预告腔。"
     }}
   ],
-  "ending": "字符串，结尾总结"
+  "ending": "字符串，结尾总结。升华至理性思考，拒绝口号。"
 }}
 
 硬性要求：
-1. sections 保持 3 到 5 段，每段只讲一个核心问题，段间要有自然衔接。
-2. 必须区分“谣言说法”和“公开事实”：每段都要写清“说法是什么、公开证据到哪一步、仍不确定什么”；不允许把“证据不足”直接写成“已经证伪”。
-3. 叙事要有逻辑链：先给结论，再给证据，再给边界或不确定点。
-4. 文风统一为公众号通俗易懂风格：自然、克制、易懂；不要口语化表达，不要书面官样句。
-5. 去冗余：删空话和重复表达；content 控制在 2 到 4 句，每句尽量短，先结论后解释。
-6. 术语可读：专业词、缩写、英文术语首次出现必须给白话解释，格式建议“术语=大白话解释（20字内）”。
-7. 不要出现 claim_id、verdict、citation_ids、e1/e2 等内部字段名。
-8. 不要输出多余字段。
-9. 正文层级必须清晰：sections 按“问题 -> 证据 -> 判断”推进，每个 heading 要具体，不要空泛标题。
-10. 每个 section 只保留一个核心点，内部叙事顺序固定为：问题 -> 证据 -> 判断。
-11. 每个 section 的 content 必须是 2 到 4 句短句；每句尽量短，避免长句和并列堆叠。
-12. 每个 section 必须包含且仅包含 1 句“【重点】”句，重点只允许落在：结论、关键数字、关键时间、关键主体。
-13. 段落衔接自然：每个 section 末句要引出下一段，避免信息跳跃和硬切换。
+1. lead 必须先用 1 段话总结交代这条热传新闻原本在说什么，概括其核心主张，不要一上来直接进入反驳、判断或证据分析。
+2. sections 的第 1 段必须用于说明“这条新闻在说什么”或“热传说法是什么”，先把原始说法讲清楚，再进入后续辨析。
+3. 不允许直接对一个尚未出场的数字、术语、报告、截图或结论做判断；如果正文要讨论某个具体说法，必须先让读者知道热传内容原本是怎么说的。
+4. 写作时优先参考新闻标题、原文摘要；如有必要，可参考原文正文前 1 到 2 段，先把新闻原始主张交代清楚，再结合事实核查信息展开解释。
+5. 正文整体顺序应优先为：热传说法 -> 公开能确认什么 -> 证据缺口或边界 -> 结论。
+1. 行文流畅，不要有割裂感。采用'剥洋葱'逻辑，不要机械罗列，要通过逻辑递进让真相自然浮现。
+2. 叙事要有逻辑链：先给结论，再给证据，再给边界或不确定点。
+3. 文风统一为公众号通俗易懂风格：自然、克制、易懂；不要口语化表达，不要书面官样句。
+4. 逻辑链条：顺序固定为：【summary结论前置】 -> 【key_point证据展开】 -> 【explain边界提醒】。transition 可选，仅在确有必要时补一句自然承接。
+5. 术语可读：专业词/缩写/英文术语首次出现必须给白话解释，且必须自然融入语境。格式建议“术语=大白话解释（20字内）”。
+6. 不要出现 claim_id、verdict、citation_ids、e1/e2 等内部字段名。
+7. transition 写法必须自然，禁止使用“下一步看/接下来我们看/然后看/再看”等模板化预告句式。
+8. 句间衔接要求：key_point 与 explain 要形成同一条叙事链，优先使用“这也意味着/但问题在于/更关键的是/放回原场景看”等自然连接，不要写成口播提纲。
+9. 每节尽量控制为一个核心段落，避免一短句一换段造成断裂感。
+10. 不要输出多余字段。
 
 新闻标题：{item.headline}
 新闻来源：{item.source}
 原文摘要：{item.warning}
+原文正文前两段：{json.dumps(item.expanded_body[:2], ensure_ascii=False)}
 事实核查：{json.dumps(fact_check.model_dump(), ensure_ascii=False)}
 现有社交文案：{writer.social_caption}
 """.strip()
@@ -591,16 +686,59 @@ web_research_notes：{json.dumps(web_research.notes, ensure_ascii=False)}
                 if not isinstance(section, dict):
                     continue
                 heading = str(section.get("heading") or "").strip()
-                content = str(section.get("content") or "").strip()
-                if not (heading and content):
+                summary = str(section.get("summary") or "").strip()
+                key_point = str(section.get("key_point") or "").strip()
+                explain = str(section.get("explain") or "").strip()
+                transition = str(section.get("transition") or "").strip()
+                legacy_content = str(section.get("content") or "").strip()
+                if not heading:
                     continue
-                normalized_sections.append({"heading": heading, "content": content})
+                if not (summary or key_point or explain or transition):
+                    if legacy_content:
+                        legacy_lines = [line.strip() for line in re.split(r"(?<=[。！？!?；;])\s*", legacy_content) if line.strip()]
+                        summary = legacy_lines[0] if len(legacy_lines) >= 1 else ""
+                        key_point = legacy_lines[1] if len(legacy_lines) >= 2 else ""
+                        explain = " ".join(legacy_lines[2:-1]).strip() if len(legacy_lines) > 3 else (legacy_lines[2] if len(legacy_lines) == 3 else "")
+                        transition = legacy_lines[-1] if len(legacy_lines) >= 2 else ""
+                    else:
+                        continue
+                normalized_sections.append(
+                    {
+                        "heading": heading,
+                        "summary": summary,
+                        "key_point": key_point,
+                        "explain": explain,
+                        "transition": transition,
+                        "content": legacy_content,
+                    }
+                )
 
         if not normalized_sections:
             normalized_sections = [
-                {"heading": "这条新闻在说什么", "content": str(item.warning).strip()},
-                {"heading": "核查后能确认什么", "content": "目前公开信息不足以支持这条爆料中的关键结论，多个核心说法缺少可核验证据。"},
-                {"heading": "读者该怎么判断", "content": "先看是否有官方披露与可追溯证据，再判断是否存在标题夸张和因果跳跃。"},
+                {
+                    "heading": "这条新闻在说什么",
+                    "summary": "先把新闻说法拆开看。",
+                    "key_point": str(item.warning).strip()[:80],
+                    "explain": "先区分传闻原句和可公开验证的信息，再判断真假边界。",
+                    "transition": "",
+                    "content": "",
+                },
+                {
+                    "heading": "核查后能确认什么",
+                    "summary": "目前没有足够公开证据支持核心结论。",
+                    "key_point": "多个关键说法缺少可追溯出处或一手记录。",
+                    "explain": "这不等于证伪，而是证据链暂时不闭合。",
+                    "transition": "",
+                    "content": "",
+                },
+                {
+                    "heading": "读者该怎么判断",
+                    "summary": "先看来源，再看证据，再看措辞强度。",
+                    "key_point": "优先官方披露、原始记录和可交叉验证材料。",
+                    "explain": "遇到绝对化标题和因果跳跃，先降低信任等级。",
+                    "transition": "",
+                    "content": "",
+                },
             ]
 
         title = str(payload.get("title") or writer.headline or item.headline).strip()
@@ -925,7 +1063,7 @@ web_research_notes：{json.dumps(web_research.notes, ensure_ascii=False)}
 
         suffix = (
             "；整体采用温和、卡通化、象征性的新闻解释插画，"
-            "参考输入图片中的线条小狗形象，使用资料卡片、便签、屏幕、简化图表和道具表达信息，"
+            "参考输入图片中的小狗形象，使用资料卡片、便签、屏幕、简化图表和道具表达信息，"
             "不要出现可读的大字标题，不要出现真实政治或商界人物肖像、机构标识、火焰、爆炸、崩塌、警报灯、惊恐人群、"
             "灾难现场、对抗场景或强刺激词语。"
         )
@@ -1031,6 +1169,28 @@ web_research_notes：{json.dumps(web_research.notes, ensure_ascii=False)}
             conn.execute(
                 "UPDATE writer_image_scripts SET generation_status = ?, generated_at = CURRENT_TIMESTAMP WHERE item_id = ? AND image_index = ?",
                 ("generating", item_id, image_index),
+            )
+            conn.commit()
+
+    def _update_story_script_generation_state(
+        self,
+        item_id: str,
+        image_index: int,
+        generation_status: str,
+        image_prompt: str = "",
+    ) -> None:
+        SCRIPT_DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+        with sqlite3.connect(SCRIPT_DB_PATH) as conn:
+            self._ensure_story_script_table(conn)
+            conn.execute(
+                """
+                UPDATE writer_image_scripts
+                SET image_prompt = CASE WHEN ? <> '' THEN ? ELSE image_prompt END,
+                    generation_status = ?,
+                    generated_at = CURRENT_TIMESTAMP
+                WHERE item_id = ? AND image_index = ?
+                """,
+                (image_prompt, image_prompt, generation_status, item_id, image_index),
             )
             conn.commit()
 
