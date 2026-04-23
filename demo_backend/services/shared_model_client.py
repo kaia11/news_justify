@@ -217,6 +217,17 @@ class SharedModelClient:
         model_name = config.model_name.strip()
         normalized_model = model_name.lower()
 
+        if self._uses_dashscope_image_generation_async(model_name):
+            return await self._generate_dashscope_image_generation_task(
+                api_root=api_root,
+                api_key=config.api_key,
+                model_name=model_name,
+                prompt=prompt,
+                size=size,
+                timeout_seconds=config.timeout_seconds,
+                reference_image_path=reference_image_path,
+            )
+
         if reference_image_path and self._supports_inline_reference_image(normalized_model):
             return await self._generate_dashscope_image_with_reference(
                 api_root=api_root,
@@ -275,7 +286,12 @@ class SharedModelClient:
         task_id = str(task.get("output", {}).get("task_id") or "")
         if not task_id:
             raise RuntimeError(f"DashScope image API did not return task_id. Raw response: {task}")
-        result = await self._poll_dashscope_task(api_root, config.api_key, task_id)
+        result = await self._poll_dashscope_task(
+            api_root,
+            config.api_key,
+            task_id,
+            timeout_seconds=config.timeout_seconds,
+        )
         return self._extract_dashscope_task_image_content(result)
 
     async def _generate_dashscope_image_with_reference(
@@ -314,10 +330,67 @@ class SharedModelClient:
         )
         return self._extract_dashscope_multimodal_image_content(response)
 
-    async def _poll_dashscope_task(self, api_root: str, api_key: str, task_id: str) -> dict[str, Any]:
+    async def _generate_dashscope_image_generation_task(
+        self,
+        api_root: str,
+        api_key: str,
+        model_name: str,
+        prompt: str,
+        size: str,
+        timeout_seconds: float,
+        reference_image_path: str = "",
+    ) -> dict[str, Any]:
+        content: list[dict[str, str]] = []
+        if reference_image_path:
+            content.append({"image": self._to_data_url(Path(reference_image_path))})
+        content.append({"text": prompt})
+
+        payload = {
+            "model": model_name,
+            "input": {
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": content,
+                    }
+                ]
+            },
+            "parameters": {
+                "size": size,
+                "n": 1,
+            },
+        }
+        task = await self._post_json(
+            api_root,
+            "/api/v1/services/aigc/image-generation/generation",
+            payload,
+            api_key,
+            timeout_seconds=timeout_seconds,
+            extra_headers={"X-DashScope-Async": "enable"},
+        )
+        task_id = str(task.get("output", {}).get("task_id") or "")
+        if not task_id:
+            raise RuntimeError(f"DashScope image-generation API did not return task_id. Raw response: {task}")
+        result = await self._poll_dashscope_task(
+            api_root,
+            api_key,
+            task_id,
+            timeout_seconds=timeout_seconds,
+        )
+        return self._extract_dashscope_task_image_content(result)
+
+    async def _poll_dashscope_task(
+        self,
+        api_root: str,
+        api_key: str,
+        task_id: str,
+        timeout_seconds: float | None = None,
+    ) -> dict[str, Any]:
         last_payload: dict[str, Any] = {}
-        async with httpx.AsyncClient(timeout=self._normalize_timeout_seconds(self.settings.text_model_timeout_seconds)) as client:
-            for _ in range(180):
+        normalized_timeout = self._normalize_timeout_seconds(timeout_seconds or self.settings.text_model_timeout_seconds)
+        max_attempts = max(180, int(normalized_timeout))
+        async with httpx.AsyncClient(timeout=normalized_timeout) as client:
+            for _ in range(max_attempts):
                 response = await client.get(
                     f"{api_root.rstrip('/')}/api/v1/tasks/{task_id}",
                     headers={"Authorization": f"Bearer {api_key}"},
@@ -434,23 +507,26 @@ class SharedModelClient:
 
     def _extract_dashscope_task_image_content(self, response: dict[str, Any]) -> dict[str, Any]:
         output = response.get("output") if isinstance(response, dict) else None
-        results = output.get("results") if isinstance(output, dict) else None
-        if not isinstance(results, list) or not results:
-            raise RuntimeError(f"DashScope image response does not contain output.results. Raw response: {response}")
+        if not isinstance(output, dict):
+            raise RuntimeError(f"DashScope image response does not contain output. Raw response: {response}")
 
-        first_item = results[0] if isinstance(results[0], dict) else {}
-        image_url = str(first_item.get("url") or "").strip()
-        actual_prompt = str(first_item.get("actual_prompt") or first_item.get("orig_prompt") or "")
-        if not image_url:
-            code = first_item.get("code")
-            message = first_item.get("message") or "DashScope image response does not contain an image URL."
-            if code:
-                raise RuntimeError(f"DashScope image API failed: code={code}, message={message}")
-            raise RuntimeError(message)
-        return {
-            "final_image_url": image_url,
-            "revised_prompt": actual_prompt,
-        }
+        results = output.get("results") if isinstance(output, dict) else None
+        if isinstance(results, list) and results:
+            first_item = results[0] if isinstance(results[0], dict) else {}
+            image_url = str(first_item.get("url") or "").strip()
+            actual_prompt = str(first_item.get("actual_prompt") or first_item.get("orig_prompt") or "")
+            if not image_url:
+                code = first_item.get("code")
+                message = first_item.get("message") or "DashScope image response does not contain an image URL."
+                if code:
+                    raise RuntimeError(f"DashScope image API failed: code={code}, message={message}")
+                raise RuntimeError(message)
+            return {
+                "final_image_url": image_url,
+                "revised_prompt": actual_prompt,
+            }
+
+        return self._extract_dashscope_multimodal_image_content(response)
 
     def _extract_dashscope_multimodal_image_content(self, response: dict[str, Any]) -> dict[str, Any]:
         output = response.get("output") if isinstance(response, dict) else None
@@ -665,6 +741,10 @@ class SharedModelClient:
     def _uses_dashscope_multimodal_sync(self, model_name: str) -> bool:
         normalized = model_name.lower()
         return normalized.startswith("qwen-image") or normalized.startswith("wan2.7-image")
+
+    def _uses_dashscope_image_generation_async(self, model_name: str) -> bool:
+        normalized = model_name.lower()
+        return normalized.startswith("wan2.7-image")
 
     def _supports_inline_reference_image(self, model_name: str) -> bool:
         normalized = model_name.lower()
